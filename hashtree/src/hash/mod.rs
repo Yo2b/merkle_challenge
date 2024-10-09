@@ -19,36 +19,40 @@ trait Hasher: Default {
 }
 
 /// A hash node in the hash tree.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 enum HashNode<H: Hasher> {
     Branch(H::Hash, Box<(HashNode<H>, HashNode<H>)>),
-    Leaf(H::Hash),
-    #[default]
-    Empty,
+    Leaf(Option<H::Hash>),
+}
+
+impl<H: Hasher> Default for HashNode<H> {
+    fn default() -> Self {
+        Self::Leaf(None)
+    }
 }
 
 impl<H: Hasher> HashNode<H> {
-    fn branch(left: Self, right: Self) -> Self {
-        Self::Branch(H::hash(left.hash(), right.hash()), Box::new((left, right)))
+    fn branch(left: Self, right: Self) -> Option<Self> {
+        Some(Self::Branch(H::hash(left.hash()?, right.hash()?), Box::new((left, right))))
     }
 
     fn leaf(hash: impl Into<H::Hash>) -> Self {
-        Self::Leaf(hash.into())
+        Self::Leaf(Some(hash.into()))
     }
 
     fn is_leaf(&self) -> bool {
-        matches!(self, Self::Leaf(_))
+        matches!(self, Self::Leaf(Some(_)))
     }
 
     fn is_empty(&self) -> bool {
-        matches!(self, Self::Empty)
+        matches!(self, Self::Leaf(None))
     }
 
     fn match_leaf(&self, hash: &H::Hash) -> bool
     where
         H::Hash: PartialEq,
     {
-        matches!(self, Self::Leaf(h) if h == hash)
+        matches!(self, Self::Leaf(Some(h)) if h == hash)
     }
 
     #[allow(dead_code)]
@@ -65,16 +69,16 @@ impl<H: Hasher> HashNode<H> {
 
     fn min_depth(&self) -> usize {
         match self {
-            Self::Empty => 0,
-            Self::Leaf(_) => 1,
+            Self::Leaf(None) => 0,
+            Self::Leaf(Some(_)) => 1,
             Self::Branch(_, nodes) => 1 + nodes.1.min_depth(), // min. depth is always right-handed
         }
     }
 
     fn max_depth(&self) -> usize {
         match self {
-            Self::Empty => 0,
-            Self::Leaf(_) => 1,
+            Self::Leaf(None) => 0,
+            Self::Leaf(Some(_)) => 1,
             Self::Branch(_, nodes) => 1 + nodes.0.max_depth(), // max. depth is always left-handed
         }
     }
@@ -89,22 +93,22 @@ impl<H: Hasher> HashNode<H> {
 
     fn len(&self) -> usize {
         match self {
-            Self::Empty => 0,
-            Self::Leaf(_) => 1,
+            Self::Leaf(None) => 0,
+            Self::Leaf(Some(_)) => 1,
             Self::Branch(_, nodes) => nodes.0.len() + nodes.1.len(), // length is the number of non-empty leaves
         }
     }
 
-    fn hash(&self) -> &H::Hash {
+    fn hash(&self) -> Option<&H::Hash> {
         match self {
-            Self::Empty => unreachable!(),
-            Self::Leaf(hash) | Self::Branch(hash, _) => hash,
+            Self::Leaf(opt) => opt.as_ref(),
+            Self::Branch(hash, _) => Some(hash),
         }
     }
 
     fn nodes(&self) -> Option<(&Self, &Self)> {
         match self {
-            Self::Empty | Self::Leaf(_) => None,
+            Self::Leaf(_) => None,
             Self::Branch(_, nodes) => Some((&nodes.0, &nodes.1)),
         }
     }
@@ -112,14 +116,14 @@ impl<H: Hasher> HashNode<H> {
     #[allow(dead_code)]
     fn nodes_mut(&mut self) -> Option<(&mut Self, &mut Self)> {
         match self {
-            Self::Empty | Self::Leaf(_) => None,
+            Self::Leaf(_) => None,
             Self::Branch(_, nodes) => Some((&mut nodes.0, &mut nodes.1)),
         }
     }
 
     fn into_nodes(self) -> Option<(Self, Self)> {
         match self {
-            Self::Empty | Self::Leaf(_) => None,
+            Self::Leaf(_) => None,
             Self::Branch(_, nodes) => Some((nodes.0, nodes.1)),
         }
     }
@@ -127,14 +131,14 @@ impl<H: Hasher> HashNode<H> {
     fn upgrade(self, other: H::Hash) -> Self {
         // all `.unwrap()` calls below are safe cause we do have hash and nodes in each case and we handle tree growth cycle
         match self {
-            Self::Empty => Self::leaf(other),
-            leaf @ Self::Leaf(_) => Self::branch(leaf, Self::leaf(other)),
+            Self::Leaf(None) => Self::leaf(other),
+            leaf @ Self::Leaf(Some(_)) => Self::branch(leaf, Self::leaf(other)).unwrap(),
             branch @ Self::Branch(_, _) => {
                 if branch.is_full() {
-                    Self::branch(branch, Self::leaf(other))
+                    Self::branch(branch, Self::leaf(other)).unwrap()
                 } else {
                     let (left, right) = branch.into_nodes().unwrap();
-                    Self::branch(left, right.upgrade(other))
+                    Self::branch(left, right.upgrade(other)).unwrap()
                 }
             }
         }
@@ -166,10 +170,7 @@ impl<H: Hasher> HashTree<H> {
     }
 
     fn hash(&self) -> &[u8] {
-        match &self.root {
-            HashNode::Empty => &[],
-            node => node.hash().as_ref(),
-        }
+        self.root.hash().map(AsRef::as_ref).unwrap_or_default()
     }
 
     fn traverse<F: FnMut(&HashNode<H>)>(&self, mut f: F) {
@@ -216,13 +217,13 @@ mod tests {
     #[test]
     fn upgrade_nodes() {
         let mut node = HashNode::<SimpleHasher>::default();
-        assert_matches!(&node, HashNode::Empty);
+        assert_matches!(&node, HashNode::Leaf(None));
         node.push("");
-        assert_matches!(&node, HashNode::Leaf(_));
+        assert_matches!(&node, HashNode::Leaf(Some(_)));
         node.push("");
-        assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Leaf(_), HashNode::Leaf(_))));
+        assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Leaf(Some(_)), HashNode::Leaf(Some(_)))));
         node.push("");
-        assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Branch(_, _), HashNode::Leaf(_))));
+        assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Branch(_, _), HashNode::Leaf(Some(_)))));
         node.push("");
         assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Branch(_, _), HashNode::Branch(_, _))));
     }
@@ -279,7 +280,7 @@ mod tests {
             let mut branch_nodes = 0;
 
             tree.traverse(|node| match node {
-                empty @ HashNode::Empty => {
+                empty @ HashNode::Leaf(None) => {
                     empty_nodes += 1;
 
                     assert!(!empty.is_full()); // empty node is never full
