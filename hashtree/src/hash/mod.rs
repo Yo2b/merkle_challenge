@@ -1,5 +1,13 @@
 use std::fmt::Debug;
 
+/// An enum to deal with errors.
+#[derive(Debug)]
+enum Error {
+    NoHash,
+    LeftNodeNotFull,
+    RightNodeNotCompliant,
+}
+
 /// A hasher trait to produce hash values.
 trait Hasher: Default {
     type Hash: AsRef<[u8]> + Debug;
@@ -28,6 +36,30 @@ enum HashNode<H: Hasher> {
 impl<H: Hasher> Default for HashNode<H> {
     fn default() -> Self {
         Self::Leaf(None)
+    }
+}
+
+impl<H: Hasher> TryFrom<(Self, Self)> for HashNode<H> {
+    type Error = Error;
+
+    fn try_from((left, right): (Self, Self)) -> Result<Self, Self::Error> {
+        if !left.is_full() {
+            return Err(Error::LeftNodeNotFull);
+        }
+
+        if left.max_depth() < right.max_depth() {
+            return Err(Error::RightNodeNotCompliant);
+        }
+
+        let mut right_node = &right;
+        while let Some((left_subtree, right_subtree)) = right_node.nodes() {
+            if !left_subtree.is_full() {
+                return Err(Error::RightNodeNotCompliant);
+            }
+            right_node = right_subtree;
+        }
+
+        Self::branch(left, right).ok_or(Error::NoHash)
     }
 }
 
@@ -212,6 +244,38 @@ mod tests {
         fn finish(self) -> Self::Hash {
             String::from_utf8(self.0).unwrap()
         }
+    }
+
+    #[test]
+    fn branch_nodes() {
+        fn empty() -> HashNode<SimpleHasher> {
+            HashNode::default()
+        }
+
+        fn leaf() -> HashNode<SimpleHasher> {
+            HashNode::leaf("")
+        }
+
+        fn branch() -> HashNode<SimpleHasher> {
+            HashNode::branch(leaf(), leaf()).unwrap()
+        }
+
+        assert_matches!(HashNode::try_from((empty(), empty())), Err(Error::LeftNodeNotFull));
+        assert_matches!(HashNode::try_from((leaf(), empty())), Err(Error::NoHash));
+        assert_matches!(HashNode::try_from((leaf(), branch())), Err(Error::RightNodeNotCompliant));
+
+        let unbalanced = HashNode::branch(leaf(), branch()).unwrap();
+        assert_matches!(HashNode::try_from((leaf(), unbalanced)), Err(Error::RightNodeNotCompliant));
+
+        let balanced = HashNode::branch(branch(), leaf()).unwrap();
+        assert_matches!(HashNode::try_from((leaf(), balanced)), Err(Error::RightNodeNotCompliant));
+
+        assert!(HashNode::try_from((leaf(), leaf())).is_ok(),);
+        assert!(HashNode::try_from((branch(), branch())).is_ok(),);
+
+        let left = HashNode::branch(branch(), branch()).unwrap();
+        let right = HashNode::branch(branch(), leaf()).unwrap();
+        assert!(HashNode::try_from((left, right)).is_ok(),);
     }
 
     #[test]
