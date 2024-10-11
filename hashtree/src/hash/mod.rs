@@ -178,12 +178,31 @@ impl<H: Hasher> HashNode<H> {
         *self = std::mem::take(self).upgrade(hash.into());
     }
 
-    fn traverse<F: FnMut(&Self)>(&self, f: &mut F) {
-        f(self);
-        if let Some((left, right)) = self.nodes() {
-            left.traverse(f);
-            right.traverse(f);
-        }
+    #[allow(dead_code)]
+    fn visit_left(&self) -> impl Iterator<Item = &Self> {
+        std::iter::successors(Some(self), |&node| node.nodes().map(|(left, _)| left))
+    }
+
+    #[allow(dead_code)]
+    fn visit_right(&self) -> impl Iterator<Item = &Self> {
+        std::iter::successors(Some(self), |&node| node.nodes().map(|(_, right)| right))
+    }
+
+    fn visit_nodes(&self) -> impl Iterator<Item = &Self> {
+        let mut rights = Vec::with_capacity(self.max_depth());
+
+        std::iter::successors(Some(self), move |&node| {
+            if let Some((left, right)) = node.nodes() {
+                rights.push(right);
+                Some(left)
+            } else {
+                rights.pop()
+            }
+        })
+    }
+
+    fn leaves(&self) -> impl Iterator<Item = &Self> {
+        self.visit_nodes().filter(|&node| node.is_leaf())
     }
 }
 
@@ -203,8 +222,8 @@ impl<H: Hasher> HashTree<H> {
         self.root.hash()
     }
 
-    fn traverse<F: FnMut(&HashNode<H>)>(&self, mut f: F) {
-        self.root.traverse(&mut f);
+    fn leaves(&self) -> impl Iterator<Item = &H::Hash> {
+        self.root.leaves().filter_map(HashNode::hash)
     }
 }
 
@@ -310,6 +329,8 @@ mod tests {
             assert_eq!(tree.hash().unwrap(), root_hash);
             assert_eq!(tree.root.len(), len);
             assert_eq!(tree.root.depth(), depth);
+
+            assert_eq!(tree.leaves().last().unwrap(), hash)
         }
     }
 
@@ -318,13 +339,28 @@ mod tests {
         const ROOT_HASH: &str = "abcdef";
         let tree = HashTree::<SimpleHasher>::from_iter(ROOT_HASH.chars());
 
-        // println!("{tree:#?}");
-
-        // tree.traverse(|node| println!("{node:?}"));
-
         assert_eq!(tree.hash().unwrap(), ROOT_HASH);
         assert_eq!(tree.root.len(), ROOT_HASH.len());
         assert_eq!(tree.root.depth(), (3, Some(2)));
+
+        assert!(tree.leaves().zip(ROOT_HASH.chars()).all(|(hash, c)| hash.chars().eq(Some(c))));
+    }
+
+    #[test]
+    fn visit_nodes() {
+        for (hashes, node_hashes) in [
+            (vec![], vec![]),
+            (vec!['a'], vec!["a"]),
+            (vec!['a', 'b'], vec!["ab", "a", "b"]),
+            (vec!['a', 'b', 'c'], vec!["abc", "ab", "a", "b", "c"]),
+        ] {
+            let tree = HashTree::<SimpleHasher>::from_iter(hashes);
+
+            // println!("{tree:#?}");
+            // tree.root.visit_nodes().for_each(|node| println!("{node:?}"));
+
+            assert!(tree.root.visit_nodes().flat_map(HashNode::hash).eq(node_hashes));
+        }
     }
 
     #[test]
@@ -341,7 +377,7 @@ mod tests {
             let mut leaf_nodes = 0;
             let mut branch_nodes = 0;
 
-            tree.traverse(|node| match node {
+            tree.root.visit_nodes().for_each(|node| match node {
                 empty @ HashNode::Leaf(None) => {
                     empty_nodes += 1;
 
