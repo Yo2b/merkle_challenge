@@ -199,8 +199,8 @@ impl<H: Hasher> HashTree<H> {
         self
     }
 
-    fn hash(&self) -> &[u8] {
-        self.root.hash().map(AsRef::as_ref).unwrap_or_default()
+    fn hash(&self) -> Option<&H::Hash> {
+        self.root.hash()
     }
 
     fn traverse<F: FnMut(&HashNode<H>)>(&self, mut f: F) {
@@ -294,7 +294,7 @@ mod tests {
     fn insert_single_hashes() {
         let mut tree = HashTree::<SimpleHasher>::default();
 
-        assert_eq!(tree.hash(), b"");
+        assert_eq!(tree.hash(), None);
         assert_eq!(tree.root.len(), 0);
         assert_eq!(tree.root.depth(), (0, None));
 
@@ -307,7 +307,7 @@ mod tests {
         ] {
             tree.push(hash);
 
-            assert_eq!(tree.hash(), root_hash.as_bytes());
+            assert_eq!(tree.hash().unwrap(), root_hash);
             assert_eq!(tree.root.len(), len);
             assert_eq!(tree.root.depth(), depth);
         }
@@ -322,7 +322,7 @@ mod tests {
 
         // tree.traverse(|node| println!("{node:?}"));
 
-        assert_eq!(tree.hash(), ROOT_HASH.as_bytes());
+        assert_eq!(tree.hash().unwrap(), ROOT_HASH);
         assert_eq!(tree.root.len(), ROOT_HASH.len());
         assert_eq!(tree.root.depth(), (3, Some(2)));
     }
@@ -334,7 +334,7 @@ mod tests {
         for hash in 'a'..='z' {
             tree.push(hash);
 
-            assert_eq!(tree.hash().last().copied(), Some(hash as u8));
+            assert_eq!(tree.hash().unwrap().chars().last(), Some(hash));
             assert_eq!(tree.root.len(), 1 + hash as usize - 'a' as usize);
 
             let mut empty_nodes = 0;
