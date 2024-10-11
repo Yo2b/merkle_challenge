@@ -101,16 +101,14 @@ impl<H: Hasher> HashNode<H> {
 
     fn min_depth(&self) -> usize {
         match self {
-            Self::Leaf(None) => 0,
-            Self::Leaf(Some(_)) => 1,
+            Self::Leaf(_) => 0,
             Self::Branch(_, nodes) => 1 + nodes.1.min_depth(), // min. depth is always right-handed
         }
     }
 
     fn max_depth(&self) -> usize {
         match self {
-            Self::Leaf(None) => 0,
-            Self::Leaf(Some(_)) => 1,
+            Self::Leaf(_) => 0,
             Self::Branch(_, nodes) => 1 + nodes.0.max_depth(), // max. depth is always left-handed
         }
     }
@@ -301,11 +299,11 @@ mod tests {
         assert_eq!(tree.root.depth(), (0, None));
 
         for (hash, len, depth, root_hash) in [
-            ("a", 1, (1, None), "a"),
-            ("b", 2, (2, None), "ab"),
-            ("a", 3, (3, Some(2)), "aba"),
-            ("c", 4, (3, None), "abac"),
-            ("def", 5, (4, Some(2)), "abacdef"),
+            ("a", 1, (0, None), "a"),
+            ("b", 2, (1, None), "ab"),
+            ("a", 3, (2, Some(1)), "aba"),
+            ("c", 4, (2, None), "abac"),
+            ("def", 5, (3, Some(1)), "abacdef"),
         ] {
             tree.push(hash);
 
@@ -326,7 +324,7 @@ mod tests {
 
         assert_eq!(tree.hash(), ROOT_HASH.as_bytes());
         assert_eq!(tree.root.len(), ROOT_HASH.len());
-        assert_eq!(tree.root.depth(), (4, Some(3)));
+        assert_eq!(tree.root.depth(), (3, Some(2)));
     }
 
     #[test]
@@ -367,6 +365,8 @@ mod tests {
             assert_eq!(empty_nodes, 0); // except for root node, `Empty` variant is only transitory
             assert_eq!(leaf_nodes, tree.root.len()); // the length of a tree is its number of leaves
             assert_eq!(branch_nodes, tree.root.len() - 1); // there is one branch less than leaves
+
+            assert_eq!(tree.root.max_depth(), tree.root.len().next_power_of_two().ilog2() as usize);
         }
     }
 }
