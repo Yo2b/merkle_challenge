@@ -9,7 +9,7 @@ enum Error {
 }
 
 /// A hasher trait to produce hash values.
-trait Hasher: Default {
+pub trait Hasher: Default {
     type Hash: AsRef<[u8]> + Debug;
 
     fn write(&mut self, bytes: &[u8]);
@@ -208,21 +208,21 @@ impl<H: Hasher> HashNode<H> {
 
 /// A hash tree.
 #[derive(Debug, Default)]
-struct HashTree<H: Hasher> {
+pub struct HashTree<H: Hasher> {
     root: HashNode<H>,
 }
 
 impl<H: Hasher> HashTree<H> {
-    fn push(&mut self, hash: impl Into<H::Hash>) -> &mut Self {
+    pub fn push(&mut self, hash: impl Into<H::Hash>) -> &mut Self {
         self.root.push(hash);
         self
     }
 
-    fn hash(&self) -> Option<&H::Hash> {
+    pub fn hash(&self) -> Option<&H::Hash> {
         self.root.hash()
     }
 
-    fn leaves(&self) -> impl Iterator<Item = &H::Hash> {
+    pub fn leaves(&self) -> impl Iterator<Item = &H::Hash> {
         self.root.leaves().filter_map(HashNode::hash)
     }
 }
