@@ -204,6 +204,33 @@ impl<H: Hasher> HashNode<H> {
     fn leaves(&self) -> impl Iterator<Item = &Self> {
         self.visit_nodes().filter(|&node| node.is_leaf())
     }
+
+    fn leaf_path(&self, i: usize) -> Option<impl Iterator<Item = &Self>> {
+        let len = self.len();
+
+        fn bits(i: usize, len: usize) -> usize {
+            let last_complete_index = 2usize.pow(len.ilog2());
+            if i > last_complete_index {
+                // incomplete subtree
+                bits(i - last_complete_index, len - last_complete_index) << 1 | 0b1
+            } else {
+                // complete subtree
+                i.reverse_bits().wrapping_shr(usize::BITS - len.next_power_of_two().ilog2())
+            }
+        }
+
+        (i < len).then(|| {
+            let mut bits = bits(i, len);
+
+            std::iter::successors(Some(self), move |&node| {
+                node.nodes().and_then(|(left, right)| {
+                    let even = bits & 0b1 == 0;
+                    bits >>= 1;
+                    even.then_some(left).or(Some(right))
+                })
+            })
+        })
+    }
 }
 
 /// A hash tree.
@@ -222,8 +249,37 @@ impl<H: Hasher> HashTree<H> {
         self.root.hash()
     }
 
+    pub fn leaf_index(&self, hash: &H::Hash) -> Option<usize>
+    where
+        H::Hash: PartialEq,
+    {
+        self.root.leaves().position(|leaf| leaf.match_leaf(hash))
+    }
+
     pub fn leaves(&self) -> impl Iterator<Item = &H::Hash> {
         self.root.leaves().filter_map(HashNode::hash)
+    }
+
+    pub fn proof(&self, i: usize) -> Vec<&H::Hash>
+    where
+        H::Hash: PartialEq,
+    {
+        let mut path = self.root.leaf_path(i).into_iter().flatten().collect::<Vec<_>>();
+
+        let mut proof = Vec::with_capacity(path.len());
+        let mut hash = path.pop().and_then(HashNode::hash);
+
+        while let Some(node) = path.pop() {
+            match node.nodes() {
+                Some((left, right)) if left.hash() == hash => proof.push(right.hash().unwrap()),
+                Some((left, right)) if right.hash() == hash => proof.push(left.hash().unwrap()),
+                _ => unreachable!(),
+            }
+
+            hash = node.hash()
+        }
+
+        proof
     }
 }
 
@@ -403,6 +459,43 @@ mod tests {
             assert_eq!(branch_nodes, tree.root.len() - 1); // there is one branch less than leaves
 
             assert_eq!(tree.root.max_depth(), tree.root.len().next_power_of_two().ilog2() as usize);
+        }
+    }
+
+    #[test]
+    fn compute_leaf_path() {
+        for leaves in (0..100).map(|end| 0..=end) {
+            let tree = HashTree::<SimpleHasher>::from_iter(leaves.clone().map(|i| i.to_string()));
+
+            for (i, leaf) in leaves.enumerate() {
+                let leaf = leaf.to_string();
+                let leaf_index = tree.leaf_index(&leaf).unwrap();
+
+                assert_eq!(leaf_index, i);
+
+                let leaf_path = tree.root.leaf_path(leaf_index).unwrap();
+
+                assert_eq!(leaf_path.last().and_then(HashNode::hash), Some(&leaf));
+            }
+        }
+    }
+
+    #[test]
+    fn compute_proof() {
+        for (leaves, leaf, expected) in [
+            ('a'..='a', 'a', vec![]),
+            ('a'..='b', 'a', vec!["b"]),
+            ('a'..='c', 'b', vec!["a", "c"]),
+            ('a'..='z', 'n', vec!["m", "op", "ijkl", "abcdefgh", "qrstuvwxyz"]),
+        ] {
+            let tree = HashTree::<SimpleHasher>::from_iter(leaves);
+
+            let leaf = String::from(leaf);
+            let index = tree.leaf_index(&leaf).unwrap();
+
+            let proof = tree.proof(index);
+
+            assert_eq!(proof, expected);
         }
     }
 }
