@@ -18,10 +18,7 @@ impl<H: Hasher> Hash<'_, H> {
     }
 }
 
-impl<H: Hasher> PartialEq for Hash<'_, H>
-where
-    H::Hash: PartialEq,
-{
+impl<H: Hasher> PartialEq for Hash<'_, H> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Left(hash), Self::Left(other)) => hash.eq(other),
@@ -39,10 +36,7 @@ pub struct HashProof<'p, H: Hasher> {
 }
 
 impl<'h, H: Hasher> HashProof<'h, H> {
-    pub(super) fn new(mut path: Vec<&'h HashNode<H>>) -> Self
-    where
-        H::Hash: PartialEq,
-    {
+    pub(super) fn new(mut path: Vec<&'h HashNode<H>>) -> Self {
         let mut root = path.pop().and_then(HashNode::hash);
         let mut hashes = Vec::with_capacity(path.len());
 
@@ -61,17 +55,11 @@ impl<'h, H: Hasher> HashProof<'h, H> {
 }
 
 impl<H: Hasher> HashProof<'_, H> {
-    pub fn compute(&self, leaf: H::Hash) -> H::Hash
-    where
-        H::Hash: PartialEq,
-    {
+    pub fn compute(&self, leaf: H::Hash) -> H::Hash {
         self.hashes.iter().fold(leaf, |hash, h| h.hash(&hash))
     }
 
-    pub fn verify(&self, leaf: H::Hash) -> bool
-    where
-        H::Hash: PartialEq,
-    {
+    pub fn verify(&self, leaf: H::Hash) -> bool {
         self.root.is_some_and(|root| *root == self.compute(leaf))
     }
 }

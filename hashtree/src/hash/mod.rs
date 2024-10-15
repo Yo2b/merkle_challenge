@@ -13,7 +13,7 @@ enum Error {
 
 /// A hasher trait to produce hash values.
 pub trait Hasher: Default {
-    type Hash: AsRef<[u8]> + Debug;
+    type Hash: AsRef<[u8]> + PartialEq + Debug;
 
     fn write(&mut self, bytes: &[u8]);
     fn finish(self) -> Self::Hash;
@@ -83,18 +83,12 @@ impl<H: Hasher> HashNode<H> {
         matches!(self, Self::Leaf(None))
     }
 
-    fn match_leaf(&self, hash: &H::Hash) -> bool
-    where
-        H::Hash: PartialEq,
-    {
+    fn match_leaf(&self, hash: &H::Hash) -> bool {
         matches!(self, Self::Leaf(Some(h)) if h == hash)
     }
 
     #[allow(dead_code)]
-    fn match_branch(&self, hash: &H::Hash) -> bool
-    where
-        H::Hash: PartialEq,
-    {
+    fn match_branch(&self, hash: &H::Hash) -> bool {
         matches!(self, Self::Branch(h, _) if h == hash)
     }
 
@@ -252,10 +246,7 @@ impl<H: Hasher> HashTree<H> {
         self.root.hash()
     }
 
-    pub fn leaf_index(&self, hash: &H::Hash) -> Option<usize>
-    where
-        H::Hash: PartialEq,
-    {
+    pub fn leaf_index(&self, hash: &H::Hash) -> Option<usize> {
         self.root.leaves().position(|leaf| leaf.match_leaf(hash))
     }
 
@@ -263,10 +254,7 @@ impl<H: Hasher> HashTree<H> {
         self.root.leaves().filter_map(HashNode::hash)
     }
 
-    pub fn proof(&self, i: usize) -> HashProof<H>
-    where
-        H::Hash: PartialEq,
-    {
+    pub fn proof(&self, i: usize) -> HashProof<H> {
         HashProof::new(self.root.leaf_path(i).into_iter().flatten().collect())
     }
 }
