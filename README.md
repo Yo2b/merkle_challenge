@@ -18,8 +18,8 @@ The remaining client/server components would just have been a matter of course a
 
 The main assessment I made from the beginning that drives the design and the implementation of the `hashtree` crate is:
 - left subtrees are frozen and never require to be updated;
-- only right subtrees need to be updated internally, until it is fully filled and balanced;
-- once a subtree is fully filled and balanced, it is frozen as the left subtree of a new super-node, with a fresh right subtree to be grown.
+- only right subtrees need to be updated internally, until a node is fully filled and balanced;
+- once a node is fully filled and balanced, it is frozen as the left subtree of a new super-node, with a fresh right subtree to be grown.
 
 Here is the representation of a hash tree:
 
@@ -45,7 +45,9 @@ This workspace is made up of the following projects:
 ## Features
 The `hashtree` crate aims to provide an efficient shared library with a minimal set of features to handle Merkle trees and generate Merkle proofs.
 
-It includes an optional feature-flagged `compat` module for compatibility with common crates providing cryptographic hash functions.
+It is generic over any hash functions through the provided `Hasher` trait and its `Hasher::Hash` associated type.
+
+It includes an optional feature-flagged `compat` module for compatibility with common crates providing cryptographic hash functions. For now, only crates relying on `digest` crate and its `digest::Digest` trait are supported. This can be easily extended by implementing the provided `Hasher` trait.
 
 ## Dependencies
 The crates in this workspace may rely on other renowned, widely tried and tested crates developed by the ever-growing Rust community, amongst others:
@@ -70,12 +72,28 @@ The crates in this workspace may rely on other renowned, widely tried and tested
 - Try to reduce `Option` and `Option::unwrap()` usage in `HashNode` handling.
 - Implement `serde` (de)serialization traits for `HashTree`, `HashNode` and `HashProof` types.
 - Make a whole hash tree fully compliant and optimized for concurrent access, locking only the part of the subtree actually requiring to be updated, eg. using `RwLock`.
+
+## Further ideas:
+- The actual `Hasher` implementor used in a concret instantiation of a `HashTree` could be stored at its root level to avoid requiring `Default` constraint trait and allocating a `Hasher` instance each time we need to compute a hash value.
 - Sibling leaves could be linked together to traverse leaves more efficiently, avoiding the whole tree to be left-hand traversed.
 
 ## Post-mortem
 - A first draft of the `hashtree` crate based on a `HashTree` struct and its underlying `HashNode` enum, generic over any hash functions through the `Hasher` trait and its `Hasher::Hash` associated type, came quite naturally.
-- Although a first idea would have to handle a binary tree with strong links between nodes in order to ease browsing within the tree, especially when computing the path from a node back to the root, eg. making use of `Rc` / `Weak` smart pointers or its atomic variants, I finally managed to keep lightweight `HashNode` variants.
+- Although a first idea would have to handle a binary tree with additional upstream linking between nodes in order to ease browsing within the tree, especially when computing the path from a leaf back to the root, eg. making use of `Rc` / `Weak` smart pointers or its atomic variants, I finally managed to keep lightweight `HashNode` variants with only downstream linking.
 - I spent some time on fine-tuning the `HashNode` upgrade process (to finally keep it stupid simple 🤩) as well as its root-to-leaf path computation (touchy but classy ✌️).
 - I also took time to write exhaustive tests, perhaps too much time, but I am fully confident in the solution.
-- And the last day I focused on refining the `hashtree` documentation and 
+- And the last day I focused on refining the `hashtree` documentation and demonstrating the expected behaviour of the client/server in a single `mock` app.
 - So, for lack of time due to work/life/challenge balance and being engrossed in polishing the `hashtree` features, I regretfully have to miss the whole networking part... 🙏
+
+Here is the output of the `mock` app:
+
+    Uploading files for backup...
+    File successfully uploaded (checksum: 85e384f69b325d96dd6738a0f7fe5f3d)
+    File successfully uploaded (checksum: d88ccd0e2c1371f644ad3c5b4cb80179)
+    File successfully uploaded (checksum: dfb9867de34ad1703712615aa7161291)
+    Storing local information... (root hash: 51027a6ae89595786aee4a86b53b9e17)
+    Oh noes, file #2 got corrupted on server side!!!
+    Restoring file #0... Ok("hello Zama team")
+    Restoring file #1... Ok("this is Yoann again")
+    Restoring file #2... Err("File is corrupted!")
+    Restoring file #3... Err("File not found...")
