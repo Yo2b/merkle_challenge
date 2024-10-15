@@ -1,5 +1,8 @@
 use std::fmt::Debug;
 
+mod proof;
+pub use proof::HashProof;
+
 /// An enum to deal with errors.
 #[derive(Debug)]
 enum Error {
@@ -260,26 +263,11 @@ impl<H: Hasher> HashTree<H> {
         self.root.leaves().filter_map(HashNode::hash)
     }
 
-    pub fn proof(&self, i: usize) -> Vec<&H::Hash>
+    pub fn proof(&self, i: usize) -> HashProof<H>
     where
         H::Hash: PartialEq,
     {
-        let mut path = self.root.leaf_path(i).into_iter().flatten().collect::<Vec<_>>();
-
-        let mut proof = Vec::with_capacity(path.len());
-        let mut hash = path.pop().and_then(HashNode::hash);
-
-        while let Some(node) = path.pop() {
-            match node.nodes() {
-                Some((left, right)) if left.hash() == hash => proof.push(right.hash().unwrap()),
-                Some((left, right)) if right.hash() == hash => proof.push(left.hash().unwrap()),
-                _ => unreachable!(),
-            }
-
-            hash = node.hash()
-        }
-
-        proof
+        HashProof::new(self.root.leaf_path(i).into_iter().flatten().collect())
     }
 }
 
@@ -306,7 +294,7 @@ mod tests {
     use assert_matches::assert_matches;
 
     #[derive(Debug, Default)]
-    struct SimpleHasher(Vec<u8>);
+    pub struct SimpleHasher(Vec<u8>);
     impl Hasher for SimpleHasher {
         type Hash = String;
 
@@ -477,25 +465,6 @@ mod tests {
 
                 assert_eq!(leaf_path.last().and_then(HashNode::hash), Some(&leaf));
             }
-        }
-    }
-
-    #[test]
-    fn compute_proof() {
-        for (leaves, leaf, expected) in [
-            ('a'..='a', 'a', vec![]),
-            ('a'..='b', 'a', vec!["b"]),
-            ('a'..='c', 'b', vec!["a", "c"]),
-            ('a'..='z', 'n', vec!["m", "op", "ijkl", "abcdefgh", "qrstuvwxyz"]),
-        ] {
-            let tree = HashTree::<SimpleHasher>::from_iter(leaves);
-
-            let leaf = String::from(leaf);
-            let index = tree.leaf_index(&leaf).unwrap();
-
-            let proof = tree.proof(index);
-
-            assert_eq!(proof, expected);
         }
     }
 }
