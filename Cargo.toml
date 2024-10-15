@@ -1,5 +1,5 @@
 [workspace]
-members = ["hashtree"]
+members = [ "hashtree", "mock"]
 resolver = "2"
 
 [workspace.package]
@@ -11,6 +11,10 @@ rust-version = "1.81"
 
 [workspace.dependencies]
 digest = "0.10"
+
+# Async handling dependencies
+# futures = "0.3"
+tokio = "1.40"
 
 # Dev-only dependencies
 assert_matches = "1.5"
