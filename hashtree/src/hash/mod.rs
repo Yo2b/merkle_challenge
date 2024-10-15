@@ -13,11 +13,16 @@ enum Error {
 
 /// A hasher trait to produce hash values.
 pub trait Hasher: Default {
+    /// Type associated to this `Hasher` implemention.
     type Hash: AsRef<[u8]> + PartialEq + Debug;
 
+    /// Feed the hasher with a new value to be hashed.
     fn write(&mut self, bytes: &[u8]);
+
+    /// Finalize the hasher and return the final hash value.
     fn finish(self) -> Self::Hash;
 
+    /// Helper method to compute the resulting hash value with exactly two input values.
     fn hash(first: impl AsRef<[u8]>, second: impl AsRef<[u8]>) -> Self::Hash
     where
         Self: Sized,
@@ -30,6 +35,19 @@ pub trait Hasher: Default {
 }
 
 /// A hash node in the hash tree.
+///
+/// A node can be either a leaf or a branch.
+/// With current implementation, a leaf is made empty in only two transitional states when:
+/// - the root node of a hash tree is empty,
+/// - an underlying node of the hash tree is upgrading its subtree.
+///
+/// This latest state only occurs when mutably accessing the root node to push a new leaf.
+///
+/// A branch is made of two underlying nodes for left / right subtrees, and a hash precomputed from left / right hashes.
+/// This means both a non-empty leaf and a branch always have a hash, and a branch always has underlying nodes.
+///
+/// A hash node is made to grow in a way that left subtrees of its recursive right nodes are always fully balanced.
+/// Its implementation tries to make the most of this assertion.
 #[derive(Debug)]
 enum HashNode<H: Hasher> {
     Branch(H::Hash, Box<(HashNode<H>, HashNode<H>)>),
@@ -67,49 +85,74 @@ impl<H: Hasher> TryFrom<(Self, Self)> for HashNode<H> {
 }
 
 impl<H: Hasher> HashNode<H> {
+    /// Create a new branch node from left/right subtrees.
+    ///
+    /// Be aware that no check is operated against left/right subtrees. Use [`HashNode::try_from()`] form instead if you need to ensure that:
+    /// - the left subtree is full
+    /// - the left subtree is deeper than the right one
+    /// - the right subtree is correctly balanced
     fn branch(left: Self, right: Self) -> Option<Self> {
         Some(Self::Branch(H::hash(left.hash()?, right.hash()?), Box::new((left, right))))
     }
 
+    /// Create a new leaf node.
     fn leaf(hash: impl Into<H::Hash>) -> Self {
         Self::Leaf(Some(hash.into()))
     }
 
+    /// Check if a node is a leaf.
     fn is_leaf(&self) -> bool {
         matches!(self, Self::Leaf(Some(_)))
     }
 
+    /// Check if a node is empty.
+    ///
+    /// Only happens when the tree is empty.
     fn is_empty(&self) -> bool {
         matches!(self, Self::Leaf(None))
     }
 
+    /// Check that a node is a leaf with the given hash.
     fn match_leaf(&self, hash: &H::Hash) -> bool {
         matches!(self, Self::Leaf(Some(h)) if h == hash)
     }
 
+    /// Check that a node is a branch with the given hash.
     #[allow(dead_code)]
     fn match_branch(&self, hash: &H::Hash) -> bool {
         matches!(self, Self::Branch(h, _) if h == hash)
     }
 
+    /// Check if a node's subtree is full.
+    ///
+    /// A subtree is full when all its branches have the same exact depth.
     fn is_full(&self) -> bool {
         !self.is_empty() && self.min_depth() == self.max_depth()
     }
 
+    /// Return the min. depth of this node's subtree, computed recursively.
+    ///
+    /// Note: min. depth is always right-handed.
     fn min_depth(&self) -> usize {
         match self {
             Self::Leaf(_) => 0,
-            Self::Branch(_, nodes) => 1 + nodes.1.min_depth(), // min. depth is always right-handed
+            Self::Branch(_, nodes) => 1 + nodes.1.min_depth(),
         }
     }
 
+    /// Return the max. depth of this node's subtree, computed recursively.
+    ///
+    /// Note: max. depth is always left-handed.
     fn max_depth(&self) -> usize {
         match self {
             Self::Leaf(_) => 0,
-            Self::Branch(_, nodes) => 1 + nodes.0.max_depth(), // max. depth is always left-handed
+            Self::Branch(_, nodes) => 1 + nodes.0.max_depth(),
         }
     }
 
+    /// Convenient method to aggregate min. / max. depth.
+    ///
+    /// If this node's subtree is not empty, `self.1.is_none()` means the subtree is full.
     #[allow(dead_code)]
     fn depth(&self) -> (usize, Option<usize>) {
         let min_depth = self.min_depth();
@@ -118,14 +161,20 @@ impl<H: Hasher> HashNode<H> {
         (max_depth, (min_depth != max_depth).then_some(min_depth))
     }
 
+    /// Return the length of this node's subtree, computed recursively.
+    ///
+    /// Note: length is the number of non-empty leaves.
     fn len(&self) -> usize {
         match self {
             Self::Leaf(None) => 0,
             Self::Leaf(Some(_)) => 1,
-            Self::Branch(_, nodes) => nodes.0.len() + nodes.1.len(), // length is the number of non-empty leaves
+            Self::Branch(_, nodes) => nodes.0.len() + nodes.1.len(),
         }
     }
 
+    /// Get a reference to the hash part of this node.
+    ///
+    /// Note: it is safe to `.unwrap()` the returned `Option` as long as this node is not empty.
     fn hash(&self) -> Option<&H::Hash> {
         match self {
             Self::Leaf(opt) => opt.as_ref(),
@@ -133,6 +182,9 @@ impl<H: Hasher> HashNode<H> {
         }
     }
 
+    /// Get references to the children parts of this node.
+    ///
+    /// Note: it is safe to `.unwrap()` the returned `Option` as long as this node is a branch.
     fn nodes(&self) -> Option<(&Self, &Self)> {
         match self {
             Self::Leaf(_) => None,
@@ -140,6 +192,9 @@ impl<H: Hasher> HashNode<H> {
         }
     }
 
+    /// Get mutable references to the children parts of this node.
+    ///
+    /// Note: it is safe to `.unwrap()` the returned `Option` as long as this node is a branch.
     #[allow(dead_code)]
     fn nodes_mut(&mut self) -> Option<(&mut Self, &mut Self)> {
         match self {
@@ -148,6 +203,9 @@ impl<H: Hasher> HashNode<H> {
         }
     }
 
+    /// Turn this node into its children parts.
+    ///
+    /// Note: it is safe to `.unwrap()` the returned `Option` as long as this node is a branch.
     fn into_nodes(self) -> Option<(Self, Self)> {
         match self {
             Self::Leaf(_) => None,
@@ -155,6 +213,12 @@ impl<H: Hasher> HashNode<H> {
         }
     }
 
+    /// Upgrade this node and combine it with a new hash part.
+    ///
+    /// This method ensures the subtree grows as expected, ugrading:
+    /// - an empty node to a leaf one,
+    /// - then a leaf node to a branch one,
+    /// - and finally completing the left subtree recursively before pushing right.
     fn upgrade(self, other: H::Hash) -> Self {
         // all `.unwrap()` calls below are safe cause we do have hash and nodes in each case and we handle tree growth cycle
         match self {
@@ -171,20 +235,26 @@ impl<H: Hasher> HashNode<H> {
         }
     }
 
+    /// A convenient method to upgrade this node in-place.
     fn push(&mut self, hash: impl Into<H::Hash>) {
         *self = std::mem::take(self).upgrade(hash.into());
     }
 
+    /// A convenient iterator to visit only left child nodes.
     #[allow(dead_code)]
     fn visit_left(&self) -> impl Iterator<Item = &Self> {
         std::iter::successors(Some(self), |&node| node.nodes().map(|(left, _)| left))
     }
 
+    /// A convenient iterator to visit only right child nodes.
     #[allow(dead_code)]
     fn visit_right(&self) -> impl Iterator<Item = &Self> {
         std::iter::successors(Some(self), |&node| node.nodes().map(|(_, right)| right))
     }
 
+    /// Iterate over subtree nodes.
+    ///
+    /// It browses all the subtree in a left-handed way.
     fn visit_nodes(&self) -> impl Iterator<Item = &Self> {
         let mut rights = Vec::with_capacity(self.max_depth());
 
@@ -198,20 +268,29 @@ impl<H: Hasher> HashNode<H> {
         })
     }
 
+    /// Convenient method to iterate over leaves only (oldest to newest).
     fn leaves(&self) -> impl Iterator<Item = &Self> {
         self.visit_nodes().filter(|&node| node.is_leaf())
     }
 
+    /// Compute the path traversing all required nodes to reach a leaf, starting from this root node.
+    ///
+    /// Returns `None` if `i` is out of range, rather than panicking.
+    ///
+    /// Note: only required nodes are lazily iterated very efficiently, at the minimal cost of the initial
+    /// deterministic computation of the theoretical path (one recursion for each right-incomplete subtree).
     fn leaf_path(&self, i: usize) -> Option<impl Iterator<Item = &Self>> {
         let len = self.len();
 
+        // This helper function recursively computes a theoritical path in right-incomplete subtrees.
+        // 0 means go left, 1 means go right.
         fn bits(i: usize, len: usize) -> usize {
             let last_complete_index = 2usize.pow(len.ilog2());
             if i > last_complete_index {
-                // incomplete subtree
+                // incomplete subtree: we have to go right once, then compute the path in the right-handed subtree
                 bits(i - last_complete_index, len - last_complete_index) << 1 | 0b1
             } else {
-                // complete subtree
+                // complete subtree: path is straightfully computed from the leaf index in the subtree
                 i.reverse_bits().wrapping_shr(usize::BITS - len.next_power_of_two().ilog2())
             }
         }
@@ -231,29 +310,55 @@ impl<H: Hasher> HashNode<H> {
 }
 
 /// A hash tree.
+///
+/// According to its underlying nodes' properties with left-handed children always fully balanced, a hash tree looks like:
+/// ```text
+///             Root: Branch(ABCDE, (ABCD, E))       _
+///                     /                   \        |
+///                    /                     \       |
+///          Branch(ABCD, (AB, CD))        Leaf(E)   v min. depth
+///            /                 \                   |
+///           /                   \                  |
+///  Branch(AB, (A, B))   Branch(CD, (C, D))         |
+///       /       \           /       \              |
+///    Leaf(A) Leaf(B)     Leaf(C) Leaf(D)           v max. depth
+///
+///    |---------------- length ----------------->
+/// ```
+///
+/// The only way to alter a hash tree requires a mutable handle on it, allowing to push new leaves with its hash value.
 #[derive(Debug, Default)]
 pub struct HashTree<H: Hasher> {
     root: HashNode<H>,
 }
 
 impl<H: Hasher> HashTree<H> {
+    /// Add a new leaf with given hash value in the hash tree.
     pub fn push(&mut self, hash: impl Into<H::Hash>) -> &mut Self {
         self.root.push(hash);
         self
     }
 
+    /// Return the precomputed root hash from this whole hash tree.
     pub fn hash(&self) -> Option<&H::Hash> {
         self.root.hash()
     }
 
+    /// Find a given hash within the leaves of this hash tree.
+    ///
+    /// Returns `Some(i)` if the hash exists, or `None` otherwise.
     pub fn leaf_index(&self, hash: &H::Hash) -> Option<usize> {
         self.root.leaves().position(|leaf| leaf.match_leaf(hash))
     }
 
+    /// Convenient method to iterate over leaf hashes only (oldest to newest).
     pub fn leaves(&self) -> impl Iterator<Item = &H::Hash> {
         self.root.leaves().filter_map(HashNode::hash)
     }
 
+    /// Compute the proof for the given leaf index.
+    ///
+    /// Returns an empty proof if `i` is out of range.
     pub fn proof(&self, i: usize) -> HashProof<H> {
         HashProof::new(self.root.leaf_path(i).into_iter().flatten().collect())
     }

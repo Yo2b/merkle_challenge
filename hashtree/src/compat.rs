@@ -1,3 +1,23 @@
+//! Provide [`Hasher`](crate::Hasher) trait implementations for compatibility with common crates
+//! providing cryptographic hash functions.
+//!
+//! It requires the `digest_compat` feature flag to be set to enable compatibility.
+//!
+//! # Supported common crates:
+//! - All crates based on [`digest`](https://docs.rs/digest) crate and its [`Digest`] trait.
+//!
+//! # Basic usage
+//! ```
+//! # use hashtree::{HashProof, HashTree};
+//! use md5::{Digest, Md5};
+//!
+//! let tree = HashTree::<Md5>::from_iter(["a", "b", "c"].map(Md5::digest));
+//!
+//! let proof = tree.proof(2);
+//!
+//! assert_eq!(proof.verify(Md5::digest("c")), true);
+//! ```
+
 pub use digest::{Digest, Output};
 
 impl<D: Digest + Default> crate::Hasher for D {

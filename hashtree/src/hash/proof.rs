@@ -3,6 +3,8 @@ use std::fmt::Debug;
 use super::{HashNode, Hasher};
 
 /// A single hash in a hash tree.
+///
+/// It can be either `Hash::Left(_)` or `Hash::Right(_)` depending on its position in the hash tree it comes from.
 #[derive(Debug)]
 enum Hash<'p, H: Hasher> {
     Left(&'p H::Hash),
@@ -10,6 +12,7 @@ enum Hash<'p, H: Hasher> {
 }
 
 impl<H: Hasher> Hash<'_, H> {
+    /// Compute the resulting hash associated to this hash value and the given one depending on its position in the hash tree.
     fn hash(&self, other: &H::Hash) -> H::Hash {
         match self {
             Self::Left(hash) => H::hash(hash, other),
@@ -18,6 +21,7 @@ impl<H: Hasher> Hash<'_, H> {
     }
 }
 
+// Don't use `#[derive(PartialEq)]` here as it would require `Hasher` to implement `PartialEq` as well.
 impl<H: Hasher> PartialEq for Hash<'_, H> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -29,6 +33,8 @@ impl<H: Hasher> PartialEq for Hash<'_, H> {
 }
 
 /// A hash proof.
+///
+/// It is built with all sibling hashes required to compute the root hash for a given leaf hash value.
 #[derive(Debug)]
 pub struct HashProof<'p, H: Hasher> {
     root: Option<&'p H::Hash>,
@@ -36,6 +42,7 @@ pub struct HashProof<'p, H: Hasher> {
 }
 
 impl<'h, H: Hasher> HashProof<'h, H> {
+    /// Build a hash proof from all sibling hashes required to compute the root hash for a given leaf hash value.
     pub(super) fn new(mut path: Vec<&'h HashNode<H>>) -> Self {
         let mut root = path.pop().and_then(HashNode::hash);
         let mut hashes = Vec::with_capacity(path.len());
@@ -55,10 +62,12 @@ impl<'h, H: Hasher> HashProof<'h, H> {
 }
 
 impl<H: Hasher> HashProof<'_, H> {
+    /// Compute the hash proof wrt. the given leaf hash value.
     pub fn compute(&self, leaf: H::Hash) -> H::Hash {
         self.hashes.iter().fold(leaf, |hash, h| h.hash(&hash))
     }
 
+    /// Compute the hash proof wrt. the given leaf hash value, comparing it to the expected root hash value.
     pub fn verify(&self, leaf: H::Hash) -> bool {
         self.root.is_some_and(|root| *root == self.compute(leaf))
     }
