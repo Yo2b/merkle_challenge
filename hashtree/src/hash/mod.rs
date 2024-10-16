@@ -72,12 +72,8 @@ impl<H: Hasher> TryFrom<(Self, Self)> for HashNode<H> {
             return Err(Error::RightNodeNotCompliant);
         }
 
-        let mut right_node = &right;
-        while let Some((left_subtree, right_subtree)) = right_node.nodes() {
-            if !left_subtree.is_full() {
-                return Err(Error::RightNodeNotCompliant);
-            }
-            right_node = right_subtree;
+        if !right.visit_right().flat_map(Self::nodes).all(|(left, _)| left.is_full()) {
+            return Err(Error::RightNodeNotCompliant);
         }
 
         Self::branch(left, right).ok_or(Error::NoHash)
@@ -247,7 +243,6 @@ impl<H: Hasher> HashNode<H> {
     }
 
     /// A convenient iterator to visit only right child nodes.
-    #[allow(dead_code)]
     fn visit_right(&self) -> impl Iterator<Item = &Self> {
         std::iter::successors(Some(self), |&node| node.nodes().map(|(_, right)| right))
     }
