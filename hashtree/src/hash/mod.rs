@@ -224,7 +224,7 @@ impl<H: Hasher> HashNode<H> {
         match self {
             Self::Leaf(None) => Self::leaf(other),
             leaf @ Self::Leaf(Some(_)) => Self::branch(leaf, Self::leaf(other)).unwrap(),
-            branch @ Self::Branch(_, _) => {
+            branch @ Self::Branch(..) => {
                 if branch.is_full() {
                     Self::branch(branch, Self::leaf(other)).unwrap()
                 } else {
@@ -441,9 +441,9 @@ mod tests {
         node.push("");
         assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Leaf(Some(_)), HashNode::Leaf(Some(_)))));
         node.push("");
-        assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Branch(_, _), HashNode::Leaf(Some(_)))));
+        assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Branch(..), HashNode::Leaf(Some(_)))));
         node.push("");
-        assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Branch(_, _), HashNode::Branch(_, _))));
+        assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Branch(..), HashNode::Branch(..))));
     }
 
     #[test]
