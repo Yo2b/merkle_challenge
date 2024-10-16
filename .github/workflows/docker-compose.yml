@@ -1,0 +1,36 @@
+name: Docker Compose
+
+on:
+  workflow_dispatch:
+  # registry_package:
+  #   types:
+  #     - published
+
+jobs:
+  compose:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Docker Compose
+        run: sudo apt-get update && sudo apt-get install docker-compose -y
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Docker metadata
+        id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          # Convert repository name to lowercase
+          images: ghcr.io/${{ github.repository }}
+          tags: latest
+
+      - name: Run Docker Compose
+        run: docker-compose -f docker-compose.yml up --build --force-recreate
