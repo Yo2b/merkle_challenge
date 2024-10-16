@@ -1,5 +1,3 @@
-use std::fmt::Debug;
-
 mod proof;
 pub use proof::HashProof;
 
@@ -14,7 +12,7 @@ enum Error {
 /// A hasher trait to produce hash values.
 pub trait Hasher: Default {
     /// Type associated to this `Hasher` implemention.
-    type Hash: AsRef<[u8]> + PartialEq + Debug;
+    type Hash: AsRef<[u8]> + PartialEq + std::fmt::Debug;
 
     /// Feed the hasher with a new value to be hashed.
     fn write(&mut self, bytes: &[u8]);
@@ -48,7 +46,6 @@ pub trait Hasher: Default {
 ///
 /// A hash node is made to grow in a way that left subtrees of its recursive right nodes are always fully balanced.
 /// Its implementation tries to make the most of this assertion.
-#[derive(Debug)]
 enum HashNode<H: Hasher> {
     Branch(H::Hash, Box<(HashNode<H>, HashNode<H>)>),
     Leaf(Option<H::Hash>),
@@ -57,6 +54,16 @@ enum HashNode<H: Hasher> {
 impl<H: Hasher> Default for HashNode<H> {
     fn default() -> Self {
         Self::Leaf(None)
+    }
+}
+
+// Don't use `#[derive(Debug)]` here as it would require `Hasher` to implement `Debug` as well.
+impl<H: Hasher> std::fmt::Debug for HashNode<H> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Leaf(opt) => write!(f, "Leaf({opt:?})"),
+            Self::Branch(hash, nodes) => write!(f, "Branch({hash:?}, {nodes:?})"),
+        }
     }
 }
 

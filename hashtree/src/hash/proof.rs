@@ -1,5 +1,3 @@
-use std::fmt::Debug;
-
 use super::{HashNode, Hasher};
 
 /// A single hash in a hash tree.
