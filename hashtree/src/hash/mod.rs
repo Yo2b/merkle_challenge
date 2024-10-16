@@ -439,10 +439,14 @@ mod tests {
         assert_matches!(&node, HashNode::Leaf(Some(_)));
         node.push("");
         assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Leaf(Some(_)), HashNode::Leaf(Some(_)))));
-        node.push("");
-        assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Branch(..), HashNode::Leaf(Some(_)))));
-        node.push("");
-        assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Branch(..), HashNode::Branch(..))));
+        for i in 2..1024usize {
+            node.push("");
+            if i == i.next_power_of_two() {
+                assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Branch(..), HashNode::Leaf(Some(_)))));
+            } else {
+                assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Branch(..), HashNode::Branch(..))));
+            }
+        }
     }
 
     #[test]
@@ -512,17 +516,14 @@ mod tests {
             assert_eq!(tree.hash().unwrap().chars().last(), Some(hash));
             assert_eq!(tree.root.len(), 1 + hash as usize - 'a' as usize);
 
-            let mut empty_nodes = 0;
             let mut leaf_nodes = 0;
             let mut branch_nodes = 0;
 
             tree.root.visit_nodes().for_each(|node| match node {
-                empty @ HashNode::Leaf(None) => {
-                    empty_nodes += 1;
-
-                    assert!(!empty.is_full()); // empty node is never full
+                HashNode::Leaf(None) => {
+                    unreachable!("except for root node, `Leaf(None)` variant is only transitory");
                 }
-                leaf @ HashNode::Leaf(_) => {
+                leaf @ HashNode::Leaf(Some(_)) => {
                     leaf_nodes += 1;
 
                     assert!(leaf.is_full()); // leaf node is always full
@@ -539,7 +540,6 @@ mod tests {
                 }
             });
 
-            assert_eq!(empty_nodes, 0); // except for root node, `Empty` variant is only transitory
             assert_eq!(leaf_nodes, tree.root.len()); // the length of a tree is its number of leaves
             assert_eq!(branch_nodes, tree.root.len() - 1); // there is one branch less than leaves
 
