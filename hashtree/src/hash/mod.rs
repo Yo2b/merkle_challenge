@@ -5,10 +5,10 @@ pub use proof::HashProof;
 
 /// An enum to deal with errors.
 #[derive(Debug)]
-enum Error {
-    NoHash,
-    LeftNodeNotFull,
-    RightNodeNotCompliant,
+enum Error<H: Hasher> {
+    EmptyNode(HashNode<H>, HashNode<H>),
+    LeftNodeNotFull(HashNode<H>, HashNode<H>),
+    RightNodeNotCompliant(HashNode<H>, HashNode<H>),
 }
 
 /// A hasher trait to produce hash values.
@@ -61,18 +61,22 @@ impl<H: Hasher> Default for HashNode<H> {
 }
 
 impl<H: Hasher> TryFrom<(Self, Self)> for HashNode<H> {
-    type Error = Error;
+    type Error = Error<H>;
 
     fn try_from((left, right): (Self, Self)) -> Result<Self, Self::Error> {
+        if left.is_empty() || right.is_empty() {
+            return Err(Error::EmptyNode(left, right));
+        }
+
         if !left.is_full() {
-            return Err(Error::LeftNodeNotFull);
+            return Err(Error::LeftNodeNotFull(left, right));
         }
 
         if left.max_depth() < right.max_depth() || !right.is_balanced() {
-            return Err(Error::RightNodeNotCompliant);
+            return Err(Error::RightNodeNotCompliant(left, right));
         }
 
-        Self::branch(left, right).ok_or(Error::NoHash)
+        Ok(Self::branch(left, right).unwrap())
     }
 }
 
@@ -410,12 +414,12 @@ mod tests {
         let unbalanced = || HashNode::branch(leaf(), branch()).unwrap();
         let full = || HashNode::branch(branch(), branch()).unwrap();
 
-        assert_matches!(HashNode::try_from((empty(), empty())), Err(Error::LeftNodeNotFull));
-        assert_matches!(HashNode::try_from((leaf(), empty())), Err(Error::NoHash));
-        assert_matches!(HashNode::try_from((leaf(), branch())), Err(Error::RightNodeNotCompliant));
-        assert_matches!(HashNode::try_from((branch(), unbalanced())), Err(Error::RightNodeNotCompliant));
-        assert_matches!(HashNode::try_from((branch(), balanced())), Err(Error::RightNodeNotCompliant));
-        assert_matches!(HashNode::try_from((balanced(), leaf())), Err(Error::LeftNodeNotFull));
+        assert_matches!(HashNode::try_from((empty(), empty())), Err(Error::EmptyNode(..)));
+        assert_matches!(HashNode::try_from((leaf(), empty())), Err(Error::EmptyNode(..)));
+        assert_matches!(HashNode::try_from((leaf(), branch())), Err(Error::RightNodeNotCompliant(..)));
+        assert_matches!(HashNode::try_from((branch(), unbalanced())), Err(Error::RightNodeNotCompliant(..)));
+        assert_matches!(HashNode::try_from((branch(), balanced())), Err(Error::RightNodeNotCompliant(..)));
+        assert_matches!(HashNode::try_from((balanced(), leaf())), Err(Error::LeftNodeNotFull(..)));
 
         assert!(HashNode::try_from((leaf(), leaf())).is_ok());
         assert!(HashNode::try_from((branch(), leaf())).is_ok());
