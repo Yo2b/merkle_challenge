@@ -68,11 +68,7 @@ impl<H: Hasher> TryFrom<(Self, Self)> for HashNode<H> {
             return Err(Error::LeftNodeNotFull);
         }
 
-        if left.max_depth() < right.max_depth() {
-            return Err(Error::RightNodeNotCompliant);
-        }
-
-        if !right.visit_right().flat_map(Self::nodes).all(|(left, _)| left.is_full()) {
+        if left.max_depth() < right.max_depth() || !right.is_balanced() {
             return Err(Error::RightNodeNotCompliant);
         }
 
@@ -117,6 +113,16 @@ impl<H: Hasher> HashNode<H> {
     #[allow(dead_code)]
     fn match_branch(&self, hash: &H::Hash) -> bool {
         matches!(self, Self::Branch(h, _) if h == hash)
+    }
+
+    /// Check if a node's subtree is correctly balanced.
+    ///
+    /// A subtree is balanced when its left branches are full and all deeper than right ones.
+    fn is_balanced(&self) -> bool {
+        self.visit_right().flat_map(Self::nodes).all(|(left, right)| {
+            let left_max_depth = left.max_depth();
+            left.min_depth() == left_max_depth && left_max_depth >= right.max_depth()
+        })
     }
 
     /// Check if a node's subtree is full.
@@ -397,34 +403,25 @@ mod tests {
 
     #[test]
     fn branch_nodes() {
-        fn empty() -> HashNode<SimpleHasher> {
-            HashNode::default()
-        }
-
-        fn leaf() -> HashNode<SimpleHasher> {
-            HashNode::leaf("")
-        }
-
-        fn branch() -> HashNode<SimpleHasher> {
-            HashNode::branch(leaf(), leaf()).unwrap()
-        }
+        let empty = HashNode::<SimpleHasher>::default;
+        let leaf = || HashNode::<SimpleHasher>::leaf("");
+        let branch = || HashNode::branch(leaf(), leaf()).unwrap();
+        let balanced = || HashNode::branch(branch(), leaf()).unwrap();
+        let unbalanced = || HashNode::branch(leaf(), branch()).unwrap();
+        let full = || HashNode::branch(branch(), branch()).unwrap();
 
         assert_matches!(HashNode::try_from((empty(), empty())), Err(Error::LeftNodeNotFull));
         assert_matches!(HashNode::try_from((leaf(), empty())), Err(Error::NoHash));
         assert_matches!(HashNode::try_from((leaf(), branch())), Err(Error::RightNodeNotCompliant));
+        assert_matches!(HashNode::try_from((branch(), unbalanced())), Err(Error::RightNodeNotCompliant));
+        assert_matches!(HashNode::try_from((branch(), balanced())), Err(Error::RightNodeNotCompliant));
+        assert_matches!(HashNode::try_from((balanced(), leaf())), Err(Error::LeftNodeNotFull));
 
-        let unbalanced = HashNode::branch(leaf(), branch()).unwrap();
-        assert_matches!(HashNode::try_from((leaf(), unbalanced)), Err(Error::RightNodeNotCompliant));
-
-        let balanced = HashNode::branch(branch(), leaf()).unwrap();
-        assert_matches!(HashNode::try_from((leaf(), balanced)), Err(Error::RightNodeNotCompliant));
-
-        assert!(HashNode::try_from((leaf(), leaf())).is_ok(),);
-        assert!(HashNode::try_from((branch(), branch())).is_ok(),);
-
-        let left = HashNode::branch(branch(), branch()).unwrap();
-        let right = HashNode::branch(branch(), leaf()).unwrap();
-        assert!(HashNode::try_from((left, right)).is_ok(),);
+        assert!(HashNode::try_from((leaf(), leaf())).is_ok());
+        assert!(HashNode::try_from((branch(), leaf())).is_ok());
+        assert!(HashNode::try_from((branch(), branch())).is_ok());
+        assert!(HashNode::try_from((full(), balanced())).is_ok());
+        assert!(HashNode::try_from((full(), full())).is_ok());
     }
 
     #[test]
