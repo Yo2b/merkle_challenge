@@ -48,6 +48,7 @@ pub trait Hasher: Default {
 /// Its implementation tries to make the most of this assertion.
 enum HashNode<H: Hasher> {
     Branch(H::Hash, Box<(HashNode<H>, HashNode<H>)>),
+    Frozen(H::Hash, Box<(HashNode<H>, HashNode<H>)>),
     Leaf(Option<H::Hash>),
 }
 
@@ -63,6 +64,7 @@ impl<H: Hasher> std::fmt::Debug for HashNode<H> {
         match self {
             Self::Leaf(opt) => write!(f, "Leaf({opt:?})"),
             Self::Branch(hash, nodes) => write!(f, "Branch({hash:?}, {nodes:?})"),
+            Self::Frozen(hash, nodes) => write!(f, "Frozen({hash:?}, {nodes:?})"),
         }
     }
 }
@@ -145,7 +147,14 @@ impl<H: Hasher> HashNode<H> {
     ///
     /// A subtree is full when all its branches have the same exact depth.
     fn is_full(&self) -> bool {
-        !self.is_empty() && self.min_depth() == self.max_depth()
+        match self {
+            Self::Leaf(opt) => opt.is_some(),
+            Self::Branch(_, nodes) => nodes.1.min_depth() == nodes.0.max_depth(),
+            Self::Frozen(_, nodes) => {
+                debug_assert_eq!(nodes.1.min_depth(), nodes.0.max_depth());
+                true
+            }
+        }
     }
 
     /// Return the min. depth of this node's subtree, computed recursively.
@@ -154,7 +163,7 @@ impl<H: Hasher> HashNode<H> {
     fn min_depth(&self) -> usize {
         match self {
             Self::Leaf(_) => 0,
-            Self::Branch(_, nodes) => 1 + nodes.1.min_depth(),
+            Self::Branch(_, nodes) | Self::Frozen(_, nodes) => 1 + nodes.1.min_depth(),
         }
     }
 
@@ -164,7 +173,7 @@ impl<H: Hasher> HashNode<H> {
     fn max_depth(&self) -> usize {
         match self {
             Self::Leaf(_) => 0,
-            Self::Branch(_, nodes) => 1 + nodes.0.max_depth(),
+            Self::Branch(_, nodes) | Self::Frozen(_, nodes) => 1 + nodes.0.max_depth(),
         }
     }
 
@@ -187,6 +196,7 @@ impl<H: Hasher> HashNode<H> {
             Self::Leaf(None) => 0,
             Self::Leaf(Some(_)) => 1,
             Self::Branch(_, nodes) => nodes.0.len() + nodes.1.len(),
+            Self::Frozen(_, nodes) => 2usize.pow(1 + nodes.0.max_depth() as u32),
         }
     }
 
@@ -196,7 +206,7 @@ impl<H: Hasher> HashNode<H> {
     fn hash(&self) -> Option<&H::Hash> {
         match self {
             Self::Leaf(opt) => opt.as_ref(),
-            Self::Branch(hash, _) => Some(hash),
+            Self::Branch(hash, _) | Self::Frozen(hash, _) => Some(hash),
         }
     }
 
@@ -206,7 +216,7 @@ impl<H: Hasher> HashNode<H> {
     fn nodes(&self) -> Option<(&Self, &Self)> {
         match self {
             Self::Leaf(_) => None,
-            Self::Branch(_, nodes) => Some((&nodes.0, &nodes.1)),
+            Self::Branch(_, nodes) | Self::Frozen(_, nodes) => Some((&nodes.0, &nodes.1)),
         }
     }
 
@@ -217,7 +227,7 @@ impl<H: Hasher> HashNode<H> {
     fn nodes_mut(&mut self) -> Option<(&mut Self, &mut Self)> {
         match self {
             Self::Leaf(_) => None,
-            Self::Branch(_, nodes) => Some((&mut nodes.0, &mut nodes.1)),
+            Self::Branch(_, nodes) | Self::Frozen(_, nodes) => Some((&mut nodes.0, &mut nodes.1)),
         }
     }
 
@@ -227,7 +237,23 @@ impl<H: Hasher> HashNode<H> {
     fn into_nodes(self) -> Option<(Self, Self)> {
         match self {
             Self::Leaf(_) => None,
-            Self::Branch(_, nodes) => Some((nodes.0, nodes.1)),
+            Self::Branch(_, nodes) | Self::Frozen(_, nodes) => Some(*nodes),
+        }
+    }
+
+    /// Freeze this node, turning it into a frozen branch.
+    ///
+    /// If the branch is already frozen this is a no-op.
+    ///
+    /// # Errors
+    /// This function returns an error when the node is not a branch or the branch is not full.
+    /// You can then try to recover since the initial node is returned as the error variant.
+    fn freeze(self) -> Result<Self, Self> {
+        match self {
+            leaf @ Self::Leaf(_) => Err(leaf),
+            branch @ Self::Branch(..) if !branch.is_full() => Err(branch),
+            Self::Branch(hash, nodes) => Ok(Self::Frozen(hash, nodes)),
+            frozen @ Self::Frozen(..) => Ok(frozen),
         }
     }
 
@@ -237,6 +263,9 @@ impl<H: Hasher> HashNode<H> {
     /// - an empty node to a leaf one,
     /// - then a leaf node to a branch one,
     /// - and finally completing the left subtree recursively before pushing right.
+    ///
+    /// # Panics
+    /// This function panics when the node is a frozen branch.
     fn upgrade(self, other: H::Hash) -> Self {
         // all `.unwrap()` calls below are safe cause we do have hash and nodes in each case and we handle tree growth cycle
         match self {
@@ -244,12 +273,13 @@ impl<H: Hasher> HashNode<H> {
             leaf @ Self::Leaf(Some(_)) => Self::branch(leaf, Self::leaf(other)).unwrap(),
             branch @ Self::Branch(..) => {
                 if branch.is_full() {
-                    Self::branch(branch, Self::leaf(other)).unwrap()
+                    Self::branch(branch.freeze().unwrap(), Self::leaf(other)).unwrap()
                 } else {
                     let (left, right) = branch.into_nodes().unwrap();
                     Self::branch(left, right.upgrade(other)).unwrap()
                 }
             }
+            Self::Frozen(..) => panic!("the node is frozen"),
         }
     }
 
@@ -451,9 +481,9 @@ mod tests {
         for i in 2..1024usize {
             node.push("");
             if i == i.next_power_of_two() {
-                assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Branch(..), HashNode::Leaf(Some(_)))));
+                assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Frozen(..), HashNode::Leaf(Some(_)))));
             } else {
-                assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Branch(..), HashNode::Branch(..))));
+                assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Frozen(..), HashNode::Branch(..))));
             }
         }
     }
@@ -546,6 +576,12 @@ mod tests {
                     // right node is full when it contains 2^n hashes
                     assert_eq!(nodes.1.is_full(), nodes.1.len().is_power_of_two());
                     assert!(nodes.1.is_balanced()); // right node is always balanced
+                }
+                HashNode::Frozen(_, nodes) => {
+                    branch_nodes += 1;
+
+                    // frozen node is always full
+                    assert!(nodes.0.is_full() && nodes.1.is_full());
                 }
             });
 
