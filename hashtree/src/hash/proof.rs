@@ -42,17 +42,17 @@ pub struct HashProof<'p, H: Hasher> {
 impl<'h, H: Hasher> HashProof<'h, H> {
     /// Build a hash proof from all sibling hashes required to compute the root hash for a given leaf hash value.
     pub(super) fn new(mut path: Vec<&'h HashNode<H>>) -> Self {
-        let mut root = path.pop().and_then(HashNode::hash);
+        let mut root = path.pop().map(HashNode::hash);
         let mut hashes = Vec::with_capacity(path.len());
 
         while let Some(node) = path.pop() {
             match node.nodes() {
-                Some((left, right)) if left.hash() == root => hashes.push(Hash::Right(right.hash().unwrap())),
-                Some((left, right)) if right.hash() == root => hashes.push(Hash::Left(left.hash().unwrap())),
+                Some((left, right)) if Some(left.hash()) == root => hashes.push(Hash::Right(right.hash())),
+                Some((left, right)) if Some(right.hash()) == root => hashes.push(Hash::Left(left.hash())),
                 _ => unreachable!(),
             }
 
-            root = node.hash()
+            root = Some(node.hash())
         }
 
         Self { root, hashes }

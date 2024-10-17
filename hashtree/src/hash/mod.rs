@@ -4,7 +4,6 @@ pub use proof::HashProof;
 /// An enum to deal with errors.
 #[derive(Debug)]
 enum Error<H: Hasher> {
-    EmptyNode(HashNode<H>, HashNode<H>),
     LeftNodeNotFull(HashNode<H>, HashNode<H>),
     RightNodeNotCompliant(HashNode<H>, HashNode<H>),
 }
@@ -35,34 +34,23 @@ pub trait Hasher: Default {
 /// A hash node in the hash tree.
 ///
 /// A node can be either a leaf or a branch.
-/// With current implementation, a leaf is made empty in only two transitional states when:
-/// - the root node of a hash tree is empty,
-/// - an underlying node of the hash tree is upgrading its subtree.
-///
-/// This latest state only occurs when mutably accessing the root node to push a new leaf.
 ///
 /// A branch is made of two underlying nodes for left / right subtrees, and a hash precomputed from left / right hashes.
-/// This means both a non-empty leaf and a branch always have a hash, and a branch always has underlying nodes.
+/// This means both a leaf and a branch always have a hash, and a branch always has underlying nodes.
 ///
 /// A hash node is made to grow in a way that left subtrees of its recursive right nodes are always fully balanced.
 /// Its implementation tries to make the most of this assertion.
 enum HashNode<H: Hasher> {
     Branch(H::Hash, Box<(HashNode<H>, HashNode<H>)>),
     Frozen(H::Hash, Box<(HashNode<H>, HashNode<H>)>),
-    Leaf(Option<H::Hash>),
-}
-
-impl<H: Hasher> Default for HashNode<H> {
-    fn default() -> Self {
-        Self::Leaf(None)
-    }
+    Leaf(H::Hash),
 }
 
 // Don't use `#[derive(Debug)]` here as it would require `Hasher` to implement `Debug` as well.
 impl<H: Hasher> std::fmt::Debug for HashNode<H> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Leaf(opt) => write!(f, "Leaf({opt:?})"),
+            Self::Leaf(hash) => write!(f, "Leaf({hash:?})"),
             Self::Branch(hash, nodes) => write!(f, "Branch({hash:?}, {nodes:?})"),
             Self::Frozen(hash, nodes) => write!(f, "Frozen({hash:?}, {nodes:?})"),
         }
@@ -78,10 +66,6 @@ impl<H: Hasher> TryFrom<(Self, Self)> for HashNode<H> {
     /// This conversion fails when the resulting branch would result in an unbalanced node.
     /// You can then try to recover as the initial nodes are returned in the error variants.
     fn try_from((left, right): (Self, Self)) -> Result<Self, Self::Error> {
-        if left.is_empty() || right.is_empty() {
-            return Err(Error::EmptyNode(left, right));
-        }
-
         if !left.is_full() {
             return Err(Error::LeftNodeNotFull(left, right));
         }
@@ -90,41 +74,35 @@ impl<H: Hasher> TryFrom<(Self, Self)> for HashNode<H> {
             return Err(Error::RightNodeNotCompliant(left, right));
         }
 
-        Ok(Self::branch(left, right).unwrap())
+        Ok(Self::branch(left, right))
     }
 }
 
 impl<H: Hasher> HashNode<H> {
     /// Create a new branch node from left/right subtrees.
     ///
-    /// Be aware that no check is operated against left/right subtrees. Use [`HashNode::try_from()`] form instead if you need to ensure that:
+    /// Be aware that no check is operated against left/right subtrees.
+    /// Use [`HashNode::try_from()`] form instead if you need to ensure that:
     /// - the left subtree is full
     /// - the left subtree is deeper than the right one
     /// - the right subtree is correctly balanced
-    fn branch(left: Self, right: Self) -> Option<Self> {
-        Some(Self::Branch(H::hash(left.hash()?, right.hash()?), Box::new((left, right))))
+    fn branch(left: Self, right: Self) -> Self {
+        Self::Branch(H::hash(left.hash(), right.hash()), Box::new((left, right)))
     }
 
     /// Create a new leaf node.
     fn leaf(hash: impl Into<H::Hash>) -> Self {
-        Self::Leaf(Some(hash.into()))
+        Self::Leaf(hash.into())
     }
 
     /// Check if a node is a leaf.
     fn is_leaf(&self) -> bool {
-        matches!(self, Self::Leaf(Some(_)))
-    }
-
-    /// Check if a node is empty.
-    ///
-    /// Only happens when the tree is empty.
-    fn is_empty(&self) -> bool {
-        matches!(self, Self::Leaf(None))
+        matches!(self, Self::Leaf(_))
     }
 
     /// Check that a node is a leaf with the given hash.
     fn match_leaf(&self, hash: &H::Hash) -> bool {
-        matches!(self, Self::Leaf(Some(h)) if h == hash)
+        matches!(self, Self::Leaf(h) if h == hash)
     }
 
     /// Check that a node is a branch with the given hash.
@@ -148,7 +126,7 @@ impl<H: Hasher> HashNode<H> {
     /// A subtree is full when all its branches have the same exact depth.
     fn is_full(&self) -> bool {
         match self {
-            Self::Leaf(opt) => opt.is_some(),
+            Self::Leaf(_) => true,
             Self::Branch(_, nodes) => nodes.1.min_depth() == nodes.0.max_depth(),
             Self::Frozen(_, nodes) => {
                 debug_assert_eq!(nodes.1.min_depth(), nodes.0.max_depth());
@@ -177,9 +155,9 @@ impl<H: Hasher> HashNode<H> {
         }
     }
 
-    /// Convenient method to aggregate min. / max. depth.
+    /// Convenient method to aggregate min. / max. depth as `(max, Some(min))`.
     ///
-    /// If this node's subtree is not empty, `self.1.is_none()` means the subtree is full.
+    /// If the returned `Option<usize>` is `None`, it also means the subtree is full.
     #[allow(dead_code)]
     fn depth(&self) -> (usize, Option<usize>) {
         let min_depth = self.min_depth();
@@ -190,23 +168,19 @@ impl<H: Hasher> HashNode<H> {
 
     /// Return the length of this node's subtree, computed recursively.
     ///
-    /// Note: length is the number of non-empty leaves.
+    /// Note: length is the number of leaves.
     fn len(&self) -> usize {
         match self {
-            Self::Leaf(None) => 0,
-            Self::Leaf(Some(_)) => 1,
+            Self::Leaf(_) => 1,
             Self::Branch(_, nodes) => nodes.0.len() + nodes.1.len(),
             Self::Frozen(_, nodes) => 2usize.pow(1 + nodes.0.max_depth() as u32),
         }
     }
 
     /// Get a reference to the hash part of this node.
-    ///
-    /// Note: it is safe to `.unwrap()` the returned `Option` as long as this node is not empty.
-    fn hash(&self) -> Option<&H::Hash> {
+    fn hash(&self) -> &H::Hash {
         match self {
-            Self::Leaf(opt) => opt.as_ref(),
-            Self::Branch(hash, _) | Self::Frozen(hash, _) => Some(hash),
+            Self::Leaf(hash) | Self::Branch(hash, _) | Self::Frozen(hash, _) => hash,
         }
     }
 
@@ -259,33 +233,27 @@ impl<H: Hasher> HashNode<H> {
 
     /// Upgrade this node and combine it with a new hash part.
     ///
-    /// This method ensures the subtree grows as expected, ugrading:
-    /// - an empty node to a leaf one,
-    /// - then a leaf node to a branch one,
-    /// - and finally completing the left subtree recursively before pushing right.
+    /// This method ensures the subtree grows as expected:
+    /// - ugrading a leaf node to a branch one,
+    /// - then completing the left subtrees recursively before pushing right.
+    /// - and finally freezing a left subtree when it is complete.
     ///
     /// # Panics
     /// This function panics when the node is a frozen branch.
-    fn upgrade(self, other: H::Hash) -> Self {
-        // all `.unwrap()` calls below are safe cause we do have hash and nodes in each case and we handle tree growth cycle
+    fn upgrade(self, other: impl Into<H::Hash>) -> Self {
+        // all `.unwrap()` calls below are safe cause we do have nodes in each case and we handle tree growth cycle
         match self {
-            Self::Leaf(None) => Self::leaf(other),
-            leaf @ Self::Leaf(Some(_)) => Self::branch(leaf, Self::leaf(other)).unwrap(),
+            leaf @ Self::Leaf(_) => Self::branch(leaf, Self::leaf(other)),
             branch @ Self::Branch(..) => {
                 if branch.is_full() {
-                    Self::branch(branch.freeze().unwrap(), Self::leaf(other)).unwrap()
+                    Self::branch(branch.freeze().unwrap(), Self::leaf(other))
                 } else {
                     let (left, right) = branch.into_nodes().unwrap();
-                    Self::branch(left, right.upgrade(other)).unwrap()
+                    Self::branch(left, right.upgrade(other))
                 }
             }
             Self::Frozen(..) => panic!("the node is frozen"),
         }
-    }
-
-    /// A convenient method to upgrade this node in-place.
-    fn push(&mut self, hash: impl Into<H::Hash>) {
-        *self = std::mem::take(self).upgrade(hash.into());
     }
 
     /// A convenient iterator to visit only left child nodes.
@@ -376,38 +344,51 @@ impl<H: Hasher> HashNode<H> {
 /// The only way to alter a hash tree requires a mutable handle on it, allowing to push new leaves with its hash value.
 #[derive(Debug, Default)]
 pub struct HashTree<H: Hasher> {
-    root: HashNode<H>,
+    root: Option<HashNode<H>>,
 }
 
 impl<H: Hasher> HashTree<H> {
     /// Add a new leaf with given hash value in the hash tree.
     pub fn push(&mut self, hash: impl Into<H::Hash>) -> &mut Self {
-        self.root.push(hash);
+        self.root = if self.root.is_some() {
+            self.root.take().map(|root| root.upgrade(hash))
+        } else {
+            Some(HashNode::leaf(hash))
+        };
+
         self
     }
 
     /// Return the precomputed root hash from this whole hash tree.
+    #[inline]
     pub fn hash(&self) -> Option<&H::Hash> {
-        self.root.hash()
+        self.root.as_ref().map(HashNode::hash)
     }
 
     /// Find a given hash within the leaves of this hash tree.
     ///
     /// Returns `Some(i)` if the hash exists, or `None` otherwise.
     pub fn leaf_index(&self, hash: &H::Hash) -> Option<usize> {
-        self.root.leaves().position(|leaf| leaf.match_leaf(hash))
+        self.root.iter().flat_map(HashNode::leaves).position(|leaf| leaf.match_leaf(hash))
     }
 
     /// Convenient method to iterate over leaf hashes only (oldest to newest).
     pub fn leaves(&self) -> impl Iterator<Item = &H::Hash> {
-        self.root.leaves().filter_map(HashNode::hash)
+        self.root.iter().flat_map(HashNode::leaves).map(HashNode::hash)
     }
 
     /// Compute the proof for the given leaf index.
     ///
     /// Returns an empty proof if `i` is out of range.
     pub fn proof(&self, i: usize) -> HashProof<H> {
-        HashProof::new(self.root.leaf_path(i).into_iter().flatten().collect())
+        HashProof::new(
+            self.root
+                .as_ref()
+                .and_then(|node| node.leaf_path(i))
+                .into_iter()
+                .flatten()
+                .collect(),
+        )
     }
 }
 
@@ -449,15 +430,12 @@ mod tests {
 
     #[test]
     fn branch_nodes() {
-        let empty = HashNode::<SimpleHasher>::default;
         let leaf = || HashNode::<SimpleHasher>::leaf("");
-        let branch = || HashNode::branch(leaf(), leaf()).unwrap();
-        let balanced = || HashNode::branch(branch(), leaf()).unwrap();
-        let unbalanced = || HashNode::branch(leaf(), branch()).unwrap();
-        let full = || HashNode::branch(branch(), branch()).unwrap();
+        let branch = || HashNode::branch(leaf(), leaf());
+        let balanced = || HashNode::branch(branch(), leaf());
+        let unbalanced = || HashNode::branch(leaf(), branch());
+        let full = || HashNode::branch(branch(), branch());
 
-        assert_matches!(HashNode::try_from((empty(), empty())), Err(Error::EmptyNode(..)));
-        assert_matches!(HashNode::try_from((leaf(), empty())), Err(Error::EmptyNode(..)));
         assert_matches!(HashNode::try_from((leaf(), branch())), Err(Error::RightNodeNotCompliant(..)));
         assert_matches!(HashNode::try_from((branch(), unbalanced())), Err(Error::RightNodeNotCompliant(..)));
         assert_matches!(HashNode::try_from((branch(), balanced())), Err(Error::RightNodeNotCompliant(..)));
@@ -472,16 +450,14 @@ mod tests {
 
     #[test]
     fn upgrade_nodes() {
-        let mut node = HashNode::<SimpleHasher>::default();
-        assert_matches!(&node, HashNode::Leaf(None));
-        node.push("");
-        assert_matches!(&node, HashNode::Leaf(Some(_)));
-        node.push("");
-        assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Leaf(Some(_)), HashNode::Leaf(Some(_)))));
+        let mut node = HashNode::<SimpleHasher>::leaf("");
+        assert_matches!(&node, HashNode::Leaf(_));
+        node = node.upgrade("");
+        assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Leaf(_), HashNode::Leaf(_))));
         for i in 2..1024usize {
-            node.push("");
+            node = node.upgrade("");
             if i == i.next_power_of_two() {
-                assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Frozen(..), HashNode::Leaf(Some(_)))));
+                assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Frozen(..), HashNode::Leaf(_))));
             } else {
                 assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Frozen(..), HashNode::Branch(..))));
             }
@@ -492,10 +468,6 @@ mod tests {
     fn insert_single_hashes() {
         let mut tree = HashTree::<SimpleHasher>::default();
 
-        assert_eq!(tree.hash(), None);
-        assert_eq!(tree.root.len(), 0);
-        assert_eq!(tree.root.depth(), (0, None));
-
         for (hash, len, depth, root_hash) in [
             ("a", 1, (0, None), "a"),
             ("b", 2, (1, None), "ab"),
@@ -505,9 +477,9 @@ mod tests {
         ] {
             tree.push(hash);
 
-            assert_eq!(tree.hash().unwrap(), root_hash);
-            assert_eq!(tree.root.len(), len);
-            assert_eq!(tree.root.depth(), depth);
+            assert_eq!(tree.root.as_ref().unwrap().hash(), root_hash);
+            assert_eq!(tree.root.as_ref().unwrap().len(), len);
+            assert_eq!(tree.root.as_ref().unwrap().depth(), depth);
 
             assert_eq!(tree.leaves().last().unwrap(), hash)
         }
@@ -518,9 +490,9 @@ mod tests {
         const ROOT_HASH: &str = "abcdef";
         let tree = HashTree::<SimpleHasher>::from_iter(ROOT_HASH.chars());
 
-        assert_eq!(tree.hash().unwrap(), ROOT_HASH);
-        assert_eq!(tree.root.len(), ROOT_HASH.len());
-        assert_eq!(tree.root.depth(), (3, Some(2)));
+        assert_eq!(tree.root.as_ref().unwrap().hash(), ROOT_HASH);
+        assert_eq!(tree.root.as_ref().unwrap().len(), ROOT_HASH.len());
+        assert_eq!(tree.root.as_ref().unwrap().depth(), (3, Some(2)));
 
         assert!(tree.leaves().zip(ROOT_HASH.chars()).all(|(hash, c)| hash.chars().eq(Some(c))));
     }
@@ -536,9 +508,9 @@ mod tests {
             let tree = HashTree::<SimpleHasher>::from_iter(hashes);
 
             // println!("{tree:#?}");
-            // tree.root.visit_nodes().for_each(|node| println!("{node:?}"));
+            // tree.root.iter().flat_map(HashNode::visit_nodes).for_each(|node| println!("{node:?}"));
 
-            assert!(tree.root.visit_nodes().flat_map(HashNode::hash).eq(node_hashes));
+            assert!(tree.root.iter().flat_map(HashNode::visit_nodes).map(HashNode::hash).eq(node_hashes));
         }
     }
 
@@ -546,23 +518,19 @@ mod tests {
     fn expand_nodes() {
         let mut tree = HashTree::<SimpleHasher>::default();
 
-        assert!(!tree.root.is_full()); // empty node is never full
-        assert!(tree.root.is_balanced()); // empty node is always balanced
-
         for hash in 'a'..='z' {
             tree.push(hash);
 
-            assert_eq!(tree.hash().unwrap().chars().last(), Some(hash));
-            assert_eq!(tree.root.len(), 1 + hash as usize - 'a' as usize);
+            let root = tree.root.as_ref().unwrap();
+
+            assert_eq!(root.hash().chars().last(), Some(hash));
+            assert_eq!(root.len(), 1 + hash as usize - 'a' as usize);
 
             let mut leaf_nodes = 0;
             let mut branch_nodes = 0;
 
-            tree.root.visit_nodes().for_each(|node| match node {
-                HashNode::Leaf(None) => {
-                    unreachable!("except for root node, `Leaf(None)` variant is only transitory");
-                }
-                leaf @ HashNode::Leaf(Some(_)) => {
+            root.visit_nodes().for_each(|node| match node {
+                leaf @ HashNode::Leaf(_) => {
                     leaf_nodes += 1;
 
                     assert!(leaf.is_full()); // leaf node is always full
@@ -585,10 +553,10 @@ mod tests {
                 }
             });
 
-            assert_eq!(leaf_nodes, tree.root.len()); // the length of a tree is its number of leaves
-            assert_eq!(branch_nodes, tree.root.len() - 1); // there is one branch less than leaves
+            assert_eq!(leaf_nodes, root.len()); // the length of a tree is its number of leaves
+            assert_eq!(branch_nodes, root.len() - 1); // there is one branch less than leaves
 
-            assert_eq!(tree.root.max_depth(), tree.root.len().next_power_of_two().ilog2() as usize);
+            assert_eq!(root.max_depth(), root.len().next_power_of_two().ilog2() as usize);
         }
     }
 
@@ -603,9 +571,9 @@ mod tests {
 
                 assert_eq!(leaf_index, i);
 
-                let leaf_path = tree.root.leaf_path(leaf_index).unwrap();
+                let leaf_path = tree.root.as_ref().unwrap().leaf_path(leaf_index).unwrap();
 
-                assert_eq!(leaf_path.last().and_then(HashNode::hash), Some(&leaf));
+                assert_eq!(leaf_path.last().map(HashNode::hash), Some(&leaf));
             }
         }
     }
