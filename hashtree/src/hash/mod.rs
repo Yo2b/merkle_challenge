@@ -1,5 +1,5 @@
 mod context;
-use context::Depth;
+use context::{Context, Depth};
 
 mod proof;
 pub use proof::HashProof;
@@ -44,8 +44,8 @@ pub trait Hasher: Default {
 /// A hash node is made to grow in a way that left subtrees of its recursive right nodes are always fully balanced.
 /// Its implementation tries to make the most of this assertion.
 enum HashNode<H: Hasher> {
-    Branch(H::Hash, Box<(HashNode<H>, HashNode<H>)>),
-    Frozen(H::Hash, Box<(HashNode<H>, HashNode<H>)>),
+    Branch(H::Hash, Box<(HashNode<H>, HashNode<H>)>, Box<Context>),
+    Frozen(H::Hash, Box<(HashNode<H>, HashNode<H>)>, u8),
     Leaf(H::Hash),
 }
 
@@ -54,8 +54,8 @@ impl<H: Hasher> std::fmt::Debug for HashNode<H> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Leaf(hash) => write!(f, "Leaf({hash:?})"),
-            Self::Branch(hash, nodes) => write!(f, "Branch({hash:?}, {nodes:?})"),
-            Self::Frozen(hash, nodes) => write!(f, "Frozen({hash:?}, {nodes:?})"),
+            Self::Branch(hash, nodes, ctx) => write!(f, "Branch({hash:?}, {nodes:?}, {ctx:?})"),
+            Self::Frozen(hash, nodes, depth) => write!(f, "Frozen({hash:?}, {nodes:?}, {depth})"),
         }
     }
 }
@@ -73,7 +73,7 @@ impl<H: Hasher> TryFrom<(Self, Self)> for HashNode<H> {
             return Err(Error::LeftNodeNotFull(left, right));
         }
 
-        if left.max_depth() < right.max_depth() || !right.is_balanced() {
+        if left.depth() < right.depth() || !right.is_balanced() {
             return Err(Error::RightNodeNotCompliant(left, right));
         }
 
@@ -90,7 +90,9 @@ impl<H: Hasher> HashNode<H> {
     /// - the left subtree is deeper than the right one
     /// - the right subtree is correctly balanced
     fn branch(left: Self, right: Self) -> Self {
-        Self::Branch(H::hash(left.hash(), right.hash()), Box::new((left, right)))
+        let context = (&left, &right).into();
+
+        Self::Branch(H::hash(left.hash(), right.hash()), Box::new((left, right)), Box::new(context))
     }
 
     /// Create a new leaf node.
@@ -111,62 +113,39 @@ impl<H: Hasher> HashNode<H> {
     /// Check that a node is a branch with the given hash.
     #[allow(dead_code)]
     fn match_branch(&self, hash: &H::Hash) -> bool {
-        matches!(self, Self::Branch(h, _) if h == hash)
+        matches!(self, Self::Branch(h, ..) if h == hash)
     }
 
     /// Check if a node's subtree is correctly balanced.
     ///
     /// A subtree is balanced when its left branches are full and all deeper than right ones.
     fn is_balanced(&self) -> bool {
-        self.visit_right().flat_map(Self::nodes).all(|(left, right)| {
-            let left_max_depth = left.max_depth();
-            left.min_depth() == left_max_depth && left_max_depth >= right.max_depth()
-        })
+        self.visit_right()
+            .flat_map(Self::nodes)
+            .all(|(left, right)| left.is_full() && left.depth() >= right.depth())
     }
 
     /// Check if a node's subtree is full.
     ///
     /// A subtree is full when all its branches have the same exact depth.
+    #[inline]
     fn is_full(&self) -> bool {
         match self {
-            Self::Leaf(_) => true,
-            Self::Branch(_, nodes) => nodes.1.min_depth() == nodes.0.max_depth(),
-            Self::Frozen(_, nodes) => {
-                debug_assert_eq!(nodes.1.min_depth(), nodes.0.max_depth());
-                true
-            }
+            Self::Branch(.., ctx) => ctx.depth().min().is_none(),
+            _ => true,
         }
     }
 
-    /// Return the min. depth of this node's subtree, computed recursively.
-    ///
-    /// Note: min. depth is always right-handed.
-    fn min_depth(&self) -> u8 {
-        match self {
-            Self::Leaf(_) => 0,
-            Self::Branch(_, nodes) | Self::Frozen(_, nodes) => 1 + nodes.1.min_depth(),
-        }
-    }
-
-    /// Return the max. depth of this node's subtree, computed recursively.
-    ///
-    /// Note: max. depth is always left-handed.
-    fn max_depth(&self) -> u8 {
-        match self {
-            Self::Leaf(_) => 0,
-            Self::Branch(_, nodes) | Self::Frozen(_, nodes) => 1 + nodes.0.max_depth(),
-        }
-    }
-
-    /// Convenient method to aggregate min. / max. depth as `(max, Some(min))`.
+    /// Return min. / max. depth as `(max, Some(min))`.
     ///
     /// If the returned `Option<u8>` is `None`, it also means the subtree is full.
-    #[allow(dead_code)]
+    #[inline]
     fn depth(&self) -> Depth {
-        let min_depth = self.min_depth();
-        let max_depth = self.max_depth();
-
-        Depth::new(min_depth, max_depth)
+        match self {
+            Self::Leaf(_) => Depth::from(0),
+            Self::Branch(.., ctx) => ctx.depth(),
+            Self::Frozen(.., depth) => Depth::from(*depth),
+        }
     }
 
     /// Return the length of this node's subtree, computed recursively.
@@ -175,15 +154,15 @@ impl<H: Hasher> HashNode<H> {
     fn len(&self) -> usize {
         match self {
             Self::Leaf(_) => 1,
-            Self::Branch(_, nodes) => nodes.0.len() + nodes.1.len(),
-            Self::Frozen(_, nodes) => 2usize.pow(1 + nodes.0.max_depth() as u32),
+            Self::Branch(.., ctx) => ctx.len(),
+            Self::Frozen(.., depth) => 2usize.pow(*depth as u32),
         }
     }
 
     /// Get a reference to the hash part of this node.
     fn hash(&self) -> &H::Hash {
         match self {
-            Self::Leaf(hash) | Self::Branch(hash, _) | Self::Frozen(hash, _) => hash,
+            Self::Leaf(hash) | Self::Branch(hash, ..) | Self::Frozen(hash, ..) => hash,
         }
     }
 
@@ -193,7 +172,7 @@ impl<H: Hasher> HashNode<H> {
     fn nodes(&self) -> Option<(&Self, &Self)> {
         match self {
             Self::Leaf(_) => None,
-            Self::Branch(_, nodes) | Self::Frozen(_, nodes) => Some((&nodes.0, &nodes.1)),
+            Self::Branch(_, nodes, _) | Self::Frozen(_, nodes, _) => Some((&nodes.0, &nodes.1)),
         }
     }
 
@@ -204,7 +183,7 @@ impl<H: Hasher> HashNode<H> {
     fn nodes_mut(&mut self) -> Option<(&mut Self, &mut Self)> {
         match self {
             Self::Leaf(_) => None,
-            Self::Branch(_, nodes) | Self::Frozen(_, nodes) => Some((&mut nodes.0, &mut nodes.1)),
+            Self::Branch(_, nodes, _) | Self::Frozen(_, nodes, _) => Some((&mut nodes.0, &mut nodes.1)),
         }
     }
 
@@ -214,7 +193,7 @@ impl<H: Hasher> HashNode<H> {
     fn into_nodes(self) -> Option<(Self, Self)> {
         match self {
             Self::Leaf(_) => None,
-            Self::Branch(_, nodes) | Self::Frozen(_, nodes) => Some(*nodes),
+            Self::Branch(_, nodes, _) | Self::Frozen(_, nodes, _) => Some(*nodes),
         }
     }
 
@@ -229,7 +208,7 @@ impl<H: Hasher> HashNode<H> {
         match self {
             leaf @ Self::Leaf(_) => Err(leaf),
             branch @ Self::Branch(..) if !branch.is_full() => Err(branch),
-            Self::Branch(hash, nodes) => Ok(Self::Frozen(hash, nodes)),
+            Self::Branch(hash, nodes, ctx) => Ok(Self::Frozen(hash, nodes, ctx.depth().max())),
             frozen @ Self::Frozen(..) => Ok(frozen),
         }
     }
@@ -274,7 +253,7 @@ impl<H: Hasher> HashNode<H> {
     ///
     /// It browses all the subtree in a left-handed way.
     fn visit_nodes(&self) -> impl Iterator<Item = &Self> {
-        let mut rights = Vec::with_capacity(self.max_depth().into());
+        let mut rights = Vec::with_capacity(self.depth().max().into());
 
         std::iter::successors(Some(self), move |&node| {
             if let Some((left, right)) = node.nodes() {
@@ -456,13 +435,13 @@ mod tests {
         let mut node = HashNode::<SimpleHasher>::leaf("");
         assert_matches!(&node, HashNode::Leaf(_));
         node = node.upgrade("");
-        assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Leaf(_), HashNode::Leaf(_))));
+        assert_matches!(&node, HashNode::Branch(_, n, _) if matches!(**n, (HashNode::Leaf(_), HashNode::Leaf(_))));
         for i in 2..1024usize {
             node = node.upgrade("");
             if i == i.next_power_of_two() {
-                assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Frozen(..), HashNode::Leaf(_))));
+                assert_matches!(&node, HashNode::Branch(_, n, _) if matches!(**n, (HashNode::Frozen(..), HashNode::Leaf(_))), "{i} -> {node:?}");
             } else {
-                assert_matches!(&node, HashNode::Branch(_, n) if matches!(**n, (HashNode::Frozen(..), HashNode::Branch(..))));
+                assert_matches!(&node, HashNode::Branch(_, n, _) if matches!(**n, (HashNode::Frozen(..), HashNode::Branch(..))), "{i} -> {node:?}");
             }
         }
     }
@@ -539,7 +518,7 @@ mod tests {
                     assert!(leaf.is_full()); // leaf node is always full
                     assert!(leaf.is_balanced()); // leaf node is always balanced
                 }
-                HashNode::Branch(_, nodes) => {
+                HashNode::Branch(_, nodes, _) => {
                     branch_nodes += 1;
 
                     // left node is always full
@@ -548,7 +527,7 @@ mod tests {
                     assert_eq!(nodes.1.is_full(), nodes.1.len().is_power_of_two());
                     assert!(nodes.1.is_balanced()); // right node is always balanced
                 }
-                HashNode::Frozen(_, nodes) => {
+                HashNode::Frozen(_, nodes, _) => {
                     branch_nodes += 1;
 
                     // frozen node is always full
@@ -559,7 +538,7 @@ mod tests {
             assert_eq!(leaf_nodes, root.len()); // the length of a tree is its number of leaves
             assert_eq!(branch_nodes, root.len() - 1); // there is one branch less than leaves
 
-            assert_eq!(root.max_depth() as u32, root.len().next_power_of_two().ilog2());
+            assert_eq!(root.depth().max() as u32, root.len().next_power_of_two().ilog2());
         }
     }
 
