@@ -138,7 +138,7 @@ impl<H: Hasher> HashNode<H> {
     /// Return the min. depth of this node's subtree, computed recursively.
     ///
     /// Note: min. depth is always right-handed.
-    fn min_depth(&self) -> usize {
+    fn min_depth(&self) -> u8 {
         match self {
             Self::Leaf(_) => 0,
             Self::Branch(_, nodes) | Self::Frozen(_, nodes) => 1 + nodes.1.min_depth(),
@@ -148,7 +148,7 @@ impl<H: Hasher> HashNode<H> {
     /// Return the max. depth of this node's subtree, computed recursively.
     ///
     /// Note: max. depth is always left-handed.
-    fn max_depth(&self) -> usize {
+    fn max_depth(&self) -> u8 {
         match self {
             Self::Leaf(_) => 0,
             Self::Branch(_, nodes) | Self::Frozen(_, nodes) => 1 + nodes.0.max_depth(),
@@ -157,9 +157,9 @@ impl<H: Hasher> HashNode<H> {
 
     /// Convenient method to aggregate min. / max. depth as `(max, Some(min))`.
     ///
-    /// If the returned `Option<usize>` is `None`, it also means the subtree is full.
+    /// If the returned `Option<u8>` is `None`, it also means the subtree is full.
     #[allow(dead_code)]
-    fn depth(&self) -> (usize, Option<usize>) {
+    fn depth(&self) -> (u8, Option<u8>) {
         let min_depth = self.min_depth();
         let max_depth = self.max_depth();
 
@@ -271,7 +271,7 @@ impl<H: Hasher> HashNode<H> {
     ///
     /// It browses all the subtree in a left-handed way.
     fn visit_nodes(&self) -> impl Iterator<Item = &Self> {
-        let mut rights = Vec::with_capacity(self.max_depth());
+        let mut rights = Vec::with_capacity(self.max_depth().into());
 
         std::iter::successors(Some(self), move |&node| {
             if let Some((left, right)) = node.nodes() {
@@ -556,7 +556,7 @@ mod tests {
             assert_eq!(leaf_nodes, root.len()); // the length of a tree is its number of leaves
             assert_eq!(branch_nodes, root.len() - 1); // there is one branch less than leaves
 
-            assert_eq!(root.max_depth(), root.len().next_power_of_two().ilog2() as usize);
+            assert_eq!(root.max_depth() as u32, root.len().next_power_of_two().ilog2());
         }
     }
 
