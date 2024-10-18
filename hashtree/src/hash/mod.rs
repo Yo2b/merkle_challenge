@@ -1,3 +1,6 @@
+mod context;
+use context::Depth;
+
 mod proof;
 pub use proof::HashProof;
 
@@ -159,11 +162,11 @@ impl<H: Hasher> HashNode<H> {
     ///
     /// If the returned `Option<u8>` is `None`, it also means the subtree is full.
     #[allow(dead_code)]
-    fn depth(&self) -> (u8, Option<u8>) {
+    fn depth(&self) -> Depth {
         let min_depth = self.min_depth();
         let max_depth = self.max_depth();
 
-        (max_depth, (min_depth != max_depth).then_some(min_depth))
+        Depth::new(min_depth, max_depth)
     }
 
     /// Return the length of this node's subtree, computed recursively.
