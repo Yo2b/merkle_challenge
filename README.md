@@ -66,10 +66,10 @@ The crates in this workspace may rely on other renowned, widely tried and tested
 
 ## Improvements
 - Make the most of the prior knowledge of a Merkle tree partitioning:
-  - Limit recursive calls when computing the depth and the length of a tree, eg. using const generic parameters to statically store the depth of a node.
+  - ~~Limit recursive calls when computing the depth and the length of a tree, eg. using const generic parameters to statically store the depth of a node~~.
   - Specialize node iterators, potentially implementing additional `ExactSizeIterator` and `DoubleEndedIterator` traits.
 - Make `HashProof` compliant with ownership unconstrained to `HashTree`'s lifetime (turning it into owned values when required), eg. using `Cow`.
-- Try to reduce `Option` and `Option::unwrap()` usage in `HashNode` handling.
+- ~~Try to reduce `Option` and `Option::unwrap()` usage in `HashNode` handling~~.
 - Implement `serde` (de)serialization traits for `HashTree`, `HashNode` and `HashProof` types.
 - Make a whole hash tree fully compliant and optimized for concurrent access, locking only the part of the subtree actually requiring to be updated, eg. using `RwLock`.
 
